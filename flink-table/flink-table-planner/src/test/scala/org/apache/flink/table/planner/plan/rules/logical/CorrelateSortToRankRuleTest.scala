@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.flink.table.planner.plan.rules.logical
 
 import org.apache.flink.table.planner.plan.optimize.program.{FlinkChainedProgram, FlinkHepRuleSetProgramBuilder, HEP_RULES_EXECUTION_TYPE, StreamOptimizeContext}
@@ -25,9 +24,7 @@ import org.apache.calcite.plan.hep.HepMatchOrder
 import org.apache.calcite.tools.RuleSets
 import org.junit.{Before, Test}
 
-/**
-  * Test for [[CalcRankTransposeRule]].
-  */
+/** Test for [[CalcRankTransposeRule]]. */
 class CorrelateSortToRankRuleTest extends TableTestBase {
   private val util = streamTestUtil()
 
@@ -37,10 +34,11 @@ class CorrelateSortToRankRuleTest extends TableTestBase {
     programs.addLast(
       "rules",
       FlinkHepRuleSetProgramBuilder.newBuilder
-          .setHepRulesExecutionType(HEP_RULES_EXECUTION_TYPE.RULE_SEQUENCE)
-          .setHepMatchOrder(HepMatchOrder.BOTTOM_UP)
-          .add(RuleSets.ofList(CorrelateSortToRankRule.INSTANCE))
-          .build())
+        .setHepRulesExecutionType(HEP_RULES_EXECUTION_TYPE.RULE_SEQUENCE)
+        .setHepMatchOrder(HepMatchOrder.BOTTOM_UP)
+        .add(RuleSets.ofList(CorrelateSortToRankRule.INSTANCE))
+        .build()
+    )
     util.replaceStreamProgram(programs)
 
     val createTable =
@@ -112,8 +110,8 @@ class CorrelateSortToRankRuleTest extends TableTestBase {
     util.verifyRelPlan(query)
   }
 
-  @Test // TODO: this is a valid case to support
-  def testMultipleGroupingsNotSupported(): Unit = {
+  @Test
+  def testCorrelateSortToRankWithMultipleGroupKeys(): Unit = {
     val query =
       s"""
          |SELECT f0, f2
@@ -196,6 +194,42 @@ class CorrelateSortToRankRuleTest extends TableTestBase {
          |    SELECT f1, f2
          |    FROM t1
          |    WHERE t2.f0 = f0 + 1
+         |    ORDER BY f2
+         |    DESC LIMIT 3
+         |  )
+      """.stripMargin
+    util.verifyRelPlan(query)
+  }
+
+  @Test
+  def testMultipleGroupingsWithConstantNotSupported1(): Unit = {
+    val query =
+      s"""
+         |SELECT f0, f2
+         |FROM
+         |  (SELECT DISTINCT f0, f1 FROM t1) t2,
+         |  LATERAL (
+         |    SELECT f2
+         |    FROM t1
+         |    WHERE f0 = 1 AND f1 = t2.f1
+         |    ORDER BY f2
+         |    DESC LIMIT 3
+         |  )
+      """.stripMargin
+    util.verifyRelPlan(query)
+  }
+
+  @Test
+  def testMultipleGroupingsWithConstantNotSupported2(): Unit = {
+    val query =
+      s"""
+         |SELECT f0, f2
+         |FROM
+         |  (SELECT DISTINCT f0, f1 FROM t1) t2,
+         |  LATERAL (
+         |    SELECT f2
+         |    FROM t1
+         |    WHERE 1 = t2.f0 AND f1 = t2.f1
          |    ORDER BY f2
          |    DESC LIMIT 3
          |  )

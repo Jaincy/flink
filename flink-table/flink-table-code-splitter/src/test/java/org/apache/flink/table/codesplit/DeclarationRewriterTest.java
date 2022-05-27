@@ -17,66 +17,43 @@
 
 package org.apache.flink.table.codesplit;
 
-import org.apache.flink.util.FileUtils;
-
-import org.junit.Assert;
-import org.junit.Test;
-
-import java.io.File;
+import org.junit.jupiter.api.Test;
 
 /** Tests for {@link DeclarationRewriter}. */
-public class DeclarationRewriterTest {
+class DeclarationRewriterTest extends CodeRewriterTestBase<DeclarationRewriter> {
+
+    public DeclarationRewriterTest() {
+        super("declaration", code -> new DeclarationRewriter(code, 20));
+    }
 
     @Test
-    public void testRewriteLocalVariable() {
+    void testRewriteLocalVariable() {
         runTest("TestRewriteLocalVariable");
     }
 
     @Test
-    public void testNotRewriteLocalVariableInFunctionWithReturnValue() {
+    void testNotRewriteLocalVariableInFunctionWithReturnValue() {
         runTest("TestNotRewriteLocalVariableInFunctionWithReturnValue");
     }
 
     @Test
-    public void testRewriteLocalVariableInForLoop() {
+    void testRewriteLocalVariableInForLoop() {
         runTest("TestRewriteLocalVariableInForLoop1");
         runTest("TestRewriteLocalVariableInForLoop2");
     }
 
     @Test
-    public void testLocalVariableWithSameName() {
+    void testLocalVariableWithSameName() {
         runTest("TestLocalVariableWithSameName");
     }
 
     @Test
-    public void testRewriteInnerClass() {
+    void testRewriteInnerClass() {
         runTest("TestRewriteInnerClass");
     }
 
-    private void runTest(String filename) {
-        try {
-            String code =
-                    FileUtils.readFileUtf8(
-                            new File(
-                                    DeclarationRewriter.class
-                                            .getClassLoader()
-                                            .getResource("declaration/code/" + filename + ".java")
-                                            .toURI()));
-            String expected =
-                    FileUtils.readFileUtf8(
-                            new File(
-                                    DeclarationRewriter.class
-                                            .getClassLoader()
-                                            .getResource(
-                                                    "declaration/expected/" + filename + ".java")
-                                            .toURI()));
-            DeclarationRewriter rewriter = new DeclarationRewriter(code, 20);
-            Assert.assertEquals(expected, rewriter.rewrite().orElse(""));
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        } finally {
-            // we reset the counter to ensure the variable names after rewrite are as expected
-            CodeSplitUtil.getCounter().set(0L);
-        }
+    @Test
+    void testLocalVariableAndMemberVariableWithSameName() {
+        runTest("TestLocalVariableAndMemberVariableWithSameName");
     }
 }

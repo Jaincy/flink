@@ -27,6 +27,8 @@ import org.apache.flink.core.testutils.CommonTestUtils;
 import org.apache.flink.runtime.accumulators.StringifiedAccumulatorResult;
 import org.apache.flink.runtime.checkpoint.CheckpointRetentionPolicy;
 import org.apache.flink.runtime.checkpoint.CheckpointStatsSnapshot;
+import org.apache.flink.runtime.checkpoint.CompletedCheckpointStatsSummarySnapshot;
+import org.apache.flink.runtime.checkpoint.StatsSummarySnapshot;
 import org.apache.flink.runtime.concurrent.ComponentMainThreadExecutorServiceAdapter;
 import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.jobgraph.JobGraph;
@@ -39,20 +41,26 @@ import org.apache.flink.runtime.jobgraph.tasks.JobCheckpointingSettings;
 import org.apache.flink.runtime.scheduler.SchedulerBase;
 import org.apache.flink.runtime.scheduler.SchedulerTestingUtils;
 import org.apache.flink.runtime.taskmanager.TaskExecutionState;
+import org.apache.flink.testutils.TestingUtils;
+import org.apache.flink.testutils.executor.TestExecutorResource;
 import org.apache.flink.util.OptionalFailure;
 import org.apache.flink.util.SerializedValue;
 import org.apache.flink.util.TestLogger;
 
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.function.Function;
 
+import static java.util.Arrays.asList;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.CoreMatchers.notNullValue;
 import static org.junit.Assert.assertArrayEquals;
@@ -63,6 +71,10 @@ import static org.junit.Assert.assertTrue;
 
 /** Tests for the {@link ArchivedExecutionGraph}. */
 public class ArchivedExecutionGraphTest extends TestLogger {
+
+    @ClassRule
+    public static final TestExecutorResource<ScheduledExecutorService> EXECUTOR_RESOURCE =
+            TestingUtils.defaultExecutorResource();
 
     private static ExecutionGraph runtimeGraph;
 
@@ -100,7 +112,6 @@ public class ArchivedExecutionGraphTest extends TestLogger {
                         CheckpointRetentionPolicy.NEVER_RETAIN_AFTER_TERMINATION,
                         true,
                         false,
-                        false,
                         0,
                         0);
         JobCheckpointingSettings checkpointingSettings =
@@ -108,14 +119,16 @@ public class ArchivedExecutionGraphTest extends TestLogger {
 
         final JobGraph jobGraph =
                 JobGraphBuilder.newStreamingJobGraphBuilder()
-                        .addJobVertices(Arrays.asList(v1, v2))
+                        .addJobVertices(asList(v1, v2))
                         .setJobCheckpointingSettings(checkpointingSettings)
                         .setExecutionConfig(config)
                         .build();
 
         SchedulerBase scheduler =
                 SchedulerTestingUtils.createScheduler(
-                        jobGraph, ComponentMainThreadExecutorServiceAdapter.forMainThread());
+                        jobGraph,
+                        ComponentMainThreadExecutorServiceAdapter.forMainThread(),
+                        EXECUTOR_RESOURCE.getExecutor());
 
         runtimeGraph = scheduler.getExecutionGraph();
 
@@ -149,7 +162,7 @@ public class ArchivedExecutionGraphTest extends TestLogger {
     @Test
     public void testCreateFromInitializingJobForSuspendedJob() {
         final ArchivedExecutionGraph suspendedExecutionGraph =
-                ArchivedExecutionGraph.createFromInitializingJob(
+                ArchivedExecutionGraph.createSparseArchivedExecutionGraph(
                         new JobID(),
                         "TestJob",
                         JobStatus.SUSPENDED,
@@ -167,7 +180,7 @@ public class ArchivedExecutionGraphTest extends TestLogger {
                 CheckpointCoordinatorConfiguration.builder().build();
 
         final ArchivedExecutionGraph archivedGraph =
-                ArchivedExecutionGraph.createFromInitializingJob(
+                ArchivedExecutionGraph.createSparseArchivedExecutionGraph(
                         new JobID(),
                         "TestJob",
                         JobStatus.INITIALIZING,
@@ -242,25 +255,33 @@ public class ArchivedExecutionGraphTest extends TestLogger {
         CheckpointStatsSnapshot runtimeSnapshot = runtimeGraph.getCheckpointStatsSnapshot();
         CheckpointStatsSnapshot archivedSnapshot = archivedGraph.getCheckpointStatsSnapshot();
 
-        assertEquals(
-                runtimeSnapshot.getSummaryStats().getEndToEndDurationStats().getAverage(),
-                archivedSnapshot.getSummaryStats().getEndToEndDurationStats().getAverage());
-        assertEquals(
-                runtimeSnapshot.getSummaryStats().getEndToEndDurationStats().getMinimum(),
-                archivedSnapshot.getSummaryStats().getEndToEndDurationStats().getMinimum());
-        assertEquals(
-                runtimeSnapshot.getSummaryStats().getEndToEndDurationStats().getMaximum(),
-                archivedSnapshot.getSummaryStats().getEndToEndDurationStats().getMaximum());
+        List<Function<CompletedCheckpointStatsSummarySnapshot, StatsSummarySnapshot>> meters =
+                asList(
+                        CompletedCheckpointStatsSummarySnapshot::getEndToEndDurationStats,
+                        CompletedCheckpointStatsSummarySnapshot::getPersistedDataStats,
+                        CompletedCheckpointStatsSummarySnapshot::getProcessedDataStats,
+                        CompletedCheckpointStatsSummarySnapshot::getStateSizeStats);
 
-        assertEquals(
-                runtimeSnapshot.getSummaryStats().getStateSizeStats().getAverage(),
-                archivedSnapshot.getSummaryStats().getStateSizeStats().getAverage());
-        assertEquals(
-                runtimeSnapshot.getSummaryStats().getStateSizeStats().getMinimum(),
-                archivedSnapshot.getSummaryStats().getStateSizeStats().getMinimum());
-        assertEquals(
-                runtimeSnapshot.getSummaryStats().getStateSizeStats().getMaximum(),
-                archivedSnapshot.getSummaryStats().getStateSizeStats().getMaximum());
+        List<Function<StatsSummarySnapshot, Object>> aggs =
+                asList(
+                        StatsSummarySnapshot::getAverage,
+                        StatsSummarySnapshot::getMinimum,
+                        StatsSummarySnapshot::getMaximum,
+                        StatsSummarySnapshot::getSum,
+                        StatsSummarySnapshot::getCount,
+                        s -> s.getQuantile(0.5d),
+                        s -> s.getQuantile(0.9d),
+                        s -> s.getQuantile(0.95d),
+                        s -> s.getQuantile(0.99d),
+                        s -> s.getQuantile(0.999d));
+        for (Function<CompletedCheckpointStatsSummarySnapshot, StatsSummarySnapshot> meter :
+                meters) {
+            StatsSummarySnapshot runtime = meter.apply(runtimeSnapshot.getSummaryStats());
+            StatsSummarySnapshot archived = meter.apply(runtimeSnapshot.getSummaryStats());
+            for (Function<StatsSummarySnapshot, Object> agg : aggs) {
+                assertEquals(agg.apply(runtime), agg.apply(archived));
+            }
+        }
 
         assertEquals(
                 runtimeSnapshot.getCounts().getTotalNumberOfCheckpoints(),

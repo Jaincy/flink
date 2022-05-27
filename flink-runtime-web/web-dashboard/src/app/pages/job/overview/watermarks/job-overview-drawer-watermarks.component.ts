@@ -16,10 +16,13 @@
  * limitations under the License.
  */
 
-import { Component, OnDestroy, OnInit, ChangeDetectionStrategy, ChangeDetectorRef } from '@angular/core';
+import { ChangeDetectionStrategy, ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core';
 import { Subject } from 'rxjs';
-import { flatMap, takeUntil } from 'rxjs/operators';
-import { JobService, MetricsService } from 'services';
+import { mergeMap, takeUntil } from 'rxjs/operators';
+
+import { MetricsService } from '@flink-runtime-web/services';
+
+import { JobLocalService } from '../../job-local.service';
 
 @Component({
   selector: 'flink-job-overview-drawer-watermarks',
@@ -28,21 +31,26 @@ import { JobService, MetricsService } from 'services';
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class JobOverviewDrawerWatermarksComponent implements OnInit, OnDestroy {
-  destroy$ = new Subject();
-  listOfWaterMark: Array<{ subTaskIndex: number; watermark: number }> = [];
-  isLoading = true;
+  public readonly trackBySubtaskIndex = (_: number, node: { subTaskIndex: string; watermark: number }): string =>
+    node.subTaskIndex;
 
-  trackWatermarkBy(_: number, node: { subTaskIndex: string; watermark: number }) {
-    return node.subTaskIndex;
-  }
+  public listOfWaterMark: Array<{ subTaskIndex: number; watermark: number }> = [];
+  public isLoading = true;
 
-  constructor(private jobService: JobService, private metricsService: MetricsService, private cdr: ChangeDetectorRef) {}
+  private readonly destroy$ = new Subject<void>();
 
-  ngOnInit() {
-    this.jobService.jobWithVertex$
+  constructor(
+    private readonly jobLocalService: JobLocalService,
+    private readonly metricsService: MetricsService,
+    private readonly cdr: ChangeDetectorRef
+  ) {}
+
+  public ngOnInit(): void {
+    this.jobLocalService
+      .jobWithVertexChanges()
       .pipe(
-        takeUntil(this.destroy$),
-        flatMap(data => this.metricsService.getWatermarks(data.job.jid, data.vertex!.id))
+        mergeMap(data => this.metricsService.loadWatermarks(data.job.jid, data.vertex!.id)),
+        takeUntil(this.destroy$)
       )
       .subscribe(
         data => {
@@ -64,7 +72,7 @@ export class JobOverviewDrawerWatermarksComponent implements OnInit, OnDestroy {
       );
   }
 
-  ngOnDestroy() {
+  public ngOnDestroy(): void {
     this.destroy$.next();
     this.destroy$.complete();
   }

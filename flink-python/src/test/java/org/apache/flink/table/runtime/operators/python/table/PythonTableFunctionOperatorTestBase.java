@@ -30,7 +30,7 @@ import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.VarCharType;
 
 import org.apache.calcite.rel.core.JoinRelType;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -47,12 +47,11 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  *
  * @param <IN> Type of the input elements.
  * @param <OUT> Type of the output elements.
- * @param <UDTFIN> Type of the UDTF input type.
  */
-public abstract class PythonTableFunctionOperatorTestBase<IN, OUT, UDTFIN> {
+abstract class PythonTableFunctionOperatorTestBase<IN, OUT> {
 
     @Test
-    public void testRetractionFieldKept() throws Exception {
+    void testRetractionFieldKept() throws Exception {
         OneInputStreamOperatorTestHarness<IN, OUT> testHarness =
                 getTestHarness(new Configuration(), JoinRelType.INNER);
         long initialTime = 0L;
@@ -76,7 +75,7 @@ public abstract class PythonTableFunctionOperatorTestBase<IN, OUT, UDTFIN> {
     }
 
     @Test
-    public void testFinishBundleTriggeredOnCheckpoint() throws Exception {
+    void testFinishBundleTriggeredOnCheckpoint() throws Exception {
         Configuration conf = new Configuration();
         conf.setInteger(PythonOptions.MAX_BUNDLE_SIZE, 10);
         OneInputStreamOperatorTestHarness<IN, OUT> testHarness =
@@ -101,7 +100,7 @@ public abstract class PythonTableFunctionOperatorTestBase<IN, OUT, UDTFIN> {
     }
 
     @Test
-    public void testFinishBundleTriggeredByCount() throws Exception {
+    void testFinishBundleTriggeredByCount() throws Exception {
         Configuration conf = new Configuration();
         conf.setInteger(PythonOptions.MAX_BUNDLE_SIZE, 2);
         OneInputStreamOperatorTestHarness<IN, OUT> testHarness =
@@ -128,7 +127,7 @@ public abstract class PythonTableFunctionOperatorTestBase<IN, OUT, UDTFIN> {
     }
 
     @Test
-    public void testFinishBundleTriggeredByTime() throws Exception {
+    void testFinishBundleTriggeredByTime() throws Exception {
         Configuration conf = new Configuration();
         conf.setInteger(PythonOptions.MAX_BUNDLE_SIZE, 10);
         conf.setLong(PythonOptions.MAX_BUNDLE_TIME_MILLS, 1000L);
@@ -153,7 +152,7 @@ public abstract class PythonTableFunctionOperatorTestBase<IN, OUT, UDTFIN> {
     }
 
     @Test
-    public void testLeftJoin() throws Exception {
+    void testLeftJoin() throws Exception {
         OneInputStreamOperatorTestHarness<IN, OUT> testHarness =
                 getTestHarness(new Configuration(), JoinRelType.LEFT);
         long initialTime = 0L;
@@ -206,7 +205,7 @@ public abstract class PythonTableFunctionOperatorTestBase<IN, OUT, UDTFIN> {
                                 new RowType.RowField("f2", new VarCharType()),
                                 new RowType.RowField("f3", new BigIntType()),
                                 new RowType.RowField("f4", new BigIntType())));
-        AbstractPythonTableFunctionOperator<IN, OUT, UDTFIN> operator =
+        PythonTableFunctionOperator operator =
                 getTestOperator(
                         config,
                         new PythonFunctionInfo(
@@ -218,7 +217,7 @@ public abstract class PythonTableFunctionOperatorTestBase<IN, OUT, UDTFIN> {
                         joinRelType);
 
         OneInputStreamOperatorTestHarness<IN, OUT> testHarness =
-                new OneInputStreamOperatorTestHarness<>(operator);
+                new OneInputStreamOperatorTestHarness(operator);
         testHarness
                 .getStreamConfig()
                 .setManagedMemoryFractionOperatorOfUseCase(ManagedMemoryUseCase.PYTHON, 0.5);
@@ -230,7 +229,7 @@ public abstract class PythonTableFunctionOperatorTestBase<IN, OUT, UDTFIN> {
     public abstract void assertOutputEquals(
             String message, Collection<Object> expected, Collection<Object> actual);
 
-    public abstract AbstractPythonTableFunctionOperator<IN, OUT, UDTFIN> getTestOperator(
+    public abstract PythonTableFunctionOperator getTestOperator(
             Configuration config,
             PythonFunctionInfo tableFunction,
             RowType inputType,

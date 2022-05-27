@@ -19,6 +19,8 @@ package org.apache.flink.table.codesplit;
 
 import org.apache.flink.annotation.Internal;
 
+import java.util.Optional;
+
 import static org.apache.flink.util.Preconditions.checkArgument;
 
 /**
@@ -32,7 +34,6 @@ public class JavaCodeSplitter {
         try {
             return splitImpl(code, maxMethodLength, maxClassMemberCount);
         } catch (Throwable t) {
-            System.out.println(code);
             throw new RuntimeException(
                     "JavaCodeSplitter failed. This is a bug. Please file an issue.", t);
         }
@@ -40,11 +41,17 @@ public class JavaCodeSplitter {
 
     private static String splitImpl(String code, int maxMethodLength, int maxClassMemberCount) {
         checkArgument(code != null && !code.isEmpty(), "code cannot be empty");
-        checkArgument(maxMethodLength > 0);
-        checkArgument(maxClassMemberCount > 0);
+        checkArgument(maxMethodLength > 0, "maxMethodLength must be greater than 0");
+        checkArgument(maxClassMemberCount > 0, "maxClassMemberCount must be greater than 0");
 
-        return new DeclarationRewriter(code, maxMethodLength)
-                .rewrite()
+        if (code.length() <= maxMethodLength) {
+            return code;
+        }
+
+        String returnValueRewrittenCode = new ReturnValueRewriter(code, maxMethodLength).rewrite();
+        return Optional.ofNullable(
+                        new DeclarationRewriter(returnValueRewrittenCode, maxMethodLength)
+                                .rewrite())
                 .map(text -> new IfStatementRewriter(text, maxMethodLength).rewrite())
                 .map(text -> new FunctionSplitter(text, maxMethodLength).rewrite())
                 .map(text -> new MemberFieldRewriter(text, maxClassMemberCount).rewrite())

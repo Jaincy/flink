@@ -14,26 +14,47 @@
  *   limitations under the License.
  */
 
-import { ChangeDetectionStrategy, ChangeDetectorRef, Component, OnInit } from '@angular/core';
-import { first, flatMap } from 'rxjs/operators';
-import { TaskManagerService } from 'services';
+import { ChangeDetectionStrategy, ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core';
+import { Subject } from 'rxjs';
+import { first, mergeMap, takeUntil } from 'rxjs/operators';
+
+import { TaskManagerLogItem } from '@flink-runtime-web/interfaces';
+import { TaskManagerService } from '@flink-runtime-web/services';
+
+import { typeDefinition } from '../../../utils/strong-type';
+import { TaskManagerLocalService } from '../task-manager-local.service';
 
 @Component({
   selector: 'flink-task-manager-log-list',
   templateUrl: './task-manager-log-list.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush
 })
-export class TaskManagerLogListComponent implements OnInit {
-  listOfLog: { name: string; size: number }[] = [];
-  isLoading = true;
+export class TaskManagerLogListComponent implements OnInit, OnDestroy {
+  public readonly trackByName = (_: number, log: TaskManagerLogItem): string => log.name;
+  public readonly narrowLogData = typeDefinition<TaskManagerLogItem>();
 
-  constructor(private taskManagerService: TaskManagerService, private cdr: ChangeDetectorRef) {}
+  public readonly sortLastModifiedTimeFn = (pre: TaskManagerLogItem, next: TaskManagerLogItem): number =>
+    pre.mtime - next.mtime;
+  public readonly sortSizeFn = (pre: TaskManagerLogItem, next: TaskManagerLogItem): number => pre.size - next.size;
 
-  ngOnInit() {
-    this.taskManagerService.taskManagerDetail$
+  public listOfLog: TaskManagerLogItem[] = [];
+  public isLoading = true;
+
+  private destroy$ = new Subject<void>();
+
+  constructor(
+    private readonly taskManagerService: TaskManagerService,
+    private readonly taskManagerLocalService: TaskManagerLocalService,
+    private readonly cdr: ChangeDetectorRef
+  ) {}
+
+  public ngOnInit(): void {
+    this.taskManagerLocalService
+      .taskManagerDetailChanges()
       .pipe(
         first(),
-        flatMap(data => this.taskManagerService.loadLogList(data.id))
+        mergeMap(data => this.taskManagerService.loadLogList(data.id)),
+        takeUntil(this.destroy$)
       )
       .subscribe(
         data => {
@@ -46,5 +67,10 @@ export class TaskManagerLogListComponent implements OnInit {
           this.cdr.markForCheck();
         }
       );
+  }
+
+  ngOnDestroy(): void {
+    this.destroy$.next();
+    this.destroy$.complete();
   }
 }

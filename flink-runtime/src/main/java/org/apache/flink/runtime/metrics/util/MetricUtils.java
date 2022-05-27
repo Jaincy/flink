@@ -31,7 +31,6 @@ import org.apache.flink.runtime.memory.MemoryManager;
 import org.apache.flink.runtime.metrics.MetricNames;
 import org.apache.flink.runtime.metrics.MetricRegistry;
 import org.apache.flink.runtime.metrics.groups.AbstractMetricGroup;
-import org.apache.flink.runtime.metrics.groups.JobManagerMetricGroup;
 import org.apache.flink.runtime.metrics.groups.ProcessMetricGroup;
 import org.apache.flink.runtime.metrics.groups.TaskManagerMetricGroup;
 import org.apache.flink.runtime.rpc.RpcService;
@@ -43,6 +42,7 @@ import org.apache.flink.util.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.management.AttributeNotFoundException;
 import javax.management.InstanceNotFoundException;
 import javax.management.MBeanException;
@@ -100,21 +100,14 @@ public class MetricUtils {
         return processMetricGroup;
     }
 
-    public static JobManagerMetricGroup instantiateJobManagerMetricGroup(
-            final MetricRegistry metricRegistry, final String hostname) {
-        final JobManagerMetricGroup jobManagerMetricGroup =
-                new JobManagerMetricGroup(metricRegistry, hostname);
-
-        return jobManagerMetricGroup;
-    }
-
     public static Tuple2<TaskManagerMetricGroup, MetricGroup> instantiateTaskManagerMetricGroup(
             MetricRegistry metricRegistry,
             String hostName,
             ResourceID resourceID,
             Optional<Time> systemResourceProbeInterval) {
         final TaskManagerMetricGroup taskManagerMetricGroup =
-                new TaskManagerMetricGroup(metricRegistry, hostName, resourceID.toString());
+                TaskManagerMetricGroup.createTaskManagerMetricGroup(
+                        metricRegistry, hostName, resourceID);
 
         MetricGroup statusGroup = createAndInitializeStatusMetricGroup(taskManagerMetricGroup);
 
@@ -189,11 +182,20 @@ public class MetricUtils {
     }
 
     public static RpcService startRemoteMetricsRpcService(
-            Configuration configuration, String hostname, RpcSystem rpcSystem) throws Exception {
+            Configuration configuration,
+            String externalAddress,
+            @Nullable String bindAddress,
+            RpcSystem rpcSystem)
+            throws Exception {
         final String portRange = configuration.getString(MetricOptions.QUERY_SERVICE_PORT);
 
-        return startMetricRpcService(
-                configuration, rpcSystem.remoteServiceBuilder(configuration, hostname, portRange));
+        final RpcSystem.RpcServiceBuilder rpcServiceBuilder =
+                rpcSystem.remoteServiceBuilder(configuration, externalAddress, portRange);
+        if (bindAddress != null) {
+            rpcServiceBuilder.withBindAddress(bindAddress);
+        }
+
+        return startMetricRpcService(configuration, rpcServiceBuilder);
     }
 
     public static RpcService startLocalMetricsRpcService(

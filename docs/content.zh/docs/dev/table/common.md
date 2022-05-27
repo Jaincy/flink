@@ -41,7 +41,7 @@ Table API 和 SQL 程序的结构
 {{< tab "Java" >}}
 ```java
 import org.apache.flink.table.api.*;
-import org.apache.flink.table.factories.DataGenOptions;
+import org.apache.flink.connector.datagen.table.DataGenOptions;
 
 // Create a TableEnvironment for batch or streaming execution.
 // See the "Create a TableEnvironment" section for details.
@@ -53,7 +53,7 @@ tableEnv.createTemporaryTable("SourceTable", TableDescriptor.forConnector("datag
       .column("f0", DataTypes.STRING())
       .build())
     .option(DataGenOptions.ROWS_PER_SECOND, 100)
-    .build())
+    .build());
 
 // Create a sink table (using SQL DDL)
 tableEnv.executeSql("CREATE TEMPORARY TABLE SinkTable WITH ('connector' = 'blackhole') LIKE SourceTable");
@@ -65,13 +65,13 @@ Table table2 = tableEnv.from("SourceTable");
 Table table3 = tableEnv.sqlQuery("SELECT * FROM SourceTable");
 
 // Emit a Table API result Table to a TableSink, same for SQL result
-TableResult tableResult = table2.executeInsert("SinkTable");
+TableResult tableResult = table2.insertInto("SinkTable").execute();
 ```
 {{< /tab >}}
 {{< tab "Scala" >}}
 ```scala
 import org.apache.flink.table.api._
-import org.apache.flink.table.factories.DataGenOptions
+import org.apache.flink.connector.datagen.table.DataGenOptions
 
 // Create a TableEnvironment for batch or streaming execution.
 // See the "Create a TableEnvironment" section for details.
@@ -86,16 +86,16 @@ tableEnv.createTemporaryTable("SourceTable", TableDescriptor.forConnector("datag
   .build())
 
 // Create a sink table (using SQL DDL)
-tableEnv.executeSql("CREATE TEMPORARY TABLE SinkTable WITH ('connector' = 'blackhole') LIKE SourceTable");
+tableEnv.executeSql("CREATE TEMPORARY TABLE SinkTable WITH ('connector' = 'blackhole') LIKE SourceTable")
 
 // Create a Table object from a Table API query
-val table1 = tableEnv.from("SourceTable");
+val table1 = tableEnv.from("SourceTable")
 
 // Create a Table object from a SQL query
-val table2 = tableEnv.sqlQuery("SELECT * FROM SourceTable");
+val table2 = tableEnv.sqlQuery("SELECT * FROM SourceTable")
 
 // Emit a Table API result Table to a TableSink, same for SQL result
-val tableResult = table1.executeInsert("SinkTable");
+val tableResult = table1.insertInto("SinkTable").execute()
 ```
 {{< /tab >}}
 {{< tab "Python" >}}
@@ -335,7 +335,7 @@ tableEnv.createTable("SourceTableA", sourceDescriptor);
 tableEnv.createTemporaryTable("SourceTableB", sourceDescriptor);
 
 // Using SQL DDL
-tableEnv.executeSql("CREATE [TEMPORARY] TABLE MyTable (...) WITH (...)")
+tableEnv.executeSql("CREATE [TEMPORARY] TABLE MyTable (...) WITH (...)");
 ```
 
 <a name="expanding-table-identifiers"></a>
@@ -379,11 +379,11 @@ tableEnv.createTemporaryView("other_catalog.other_database.exampleView", table);
 {{< tab "Scala" >}}
 ```scala
 // get a TableEnvironment
-val tEnv: TableEnvironment = ...;
+val tEnv: TableEnvironment = ...
 tEnv.useCatalog("custom_catalog")
 tEnv.useDatabase("custom_database")
 
-val table: Table = ...;
+val table: Table = ...
 
 // register the view named 'exampleView' in the catalog named 'custom_catalog'
 // in the database named 'custom_database' 
@@ -475,9 +475,9 @@ table_env = # see "Create a TableEnvironment" section
 orders = table_env.from_path("Orders")
 # compute revenue for all customers from France
 revenue = orders \
-    .filter(orders.cCountry == 'FRANCE') \
-    .group_by(orders.cID, orders.cName) \
-    .select(orders.cID, orders.cName, orders.revenue.sum.alias('revSum'))
+    .filter(col('cCountry') == 'FRANCE') \
+    .group_by(col('cID'), col('cName')) \
+    .select(col('cID'), col('cName'), col('revenue').sum.alias('revSum'))
 
 # emit or convert Table
 # execute query
@@ -645,7 +645,9 @@ Table API 和 SQL 查询的混用非常简单因为它们都返回 `Table` 对�
 
 请参考文档 [Table Sources & Sinks]({{< ref "docs/dev/table/sourcesSinks" >}}) 以获取更多关于可用 Sink 的信息以及如何自定义 `DynamicTableSink`。
 
-方法 `Table.executeInsert(String tableName)` 将 `Table` 发送至已注册的 `TableSink`。该方法通过名称在 catalog 中查找 `TableSink` 并确认`Table` schema 和 `TableSink` schema 一致。
+方法 `Table.insertInto(String tableName)` 定义了一个完整的端到端管道将源表中的数据传输到一个被注册的输出表中。 
+该方法通过名称在 catalog 中查找输出表并确认 `Table` schema 和输出表 schema 一致。
+可以通过方法 `TablePipeline.explain()` 和 `TablePipeline.execute()` 分别来解释和执行一个数据流管道。
 
 下面的示例演示如何输出 `Table`：
 
@@ -656,21 +658,31 @@ Table API 和 SQL 查询的混用非常简单因为它们都返回 `Table` 对�
 TableEnvironment tableEnv = ...; // see "Create a TableEnvironment" section
 
 // create an output Table
-final Schema schema = new Schema()
-    .field("a", DataTypes.INT())
-    .field("b", DataTypes.STRING())
-    .field("c", DataTypes.BIGINT());
+final Schema schema = Schema.newBuilder()
+    .column("a", DataTypes.INT())
+    .column("b", DataTypes.STRING())
+    .column("c", DataTypes.BIGINT())
+    .build();
 
-tableEnv.connect(new FileSystem().path("/path/to/file"))
-    .withFormat(new Csv().fieldDelimiter('|').deriveSchema())
-    .withSchema(schema)
-    .createTemporaryTable("CsvSinkTable");
+tableEnv.createTemporaryTable("CsvSinkTable", TableDescriptor.forConnector("filesystem")
+    .schema(schema)
+    .option("path", "/path/to/file")
+    .format(FormatDescriptor.forFormat("csv")
+        .option("field-delimiter", "|")
+        .build())
+    .build());
 
 // compute a result Table using Table API operators and/or SQL queries
-Table result = ...
+Table result = ...;
+
+// Prepare the insert into pipeline
+TablePipeline pipeline = result.insertInto("CsvSinkTable");
+
+// Print explain details
+pipeline.printExplain();
 
 // emit the result Table to the registered TableSink
-result.executeInsert("CsvSinkTable");
+pipeline.execute();
 
 ```
 {{< /tab >}}
@@ -680,21 +692,31 @@ result.executeInsert("CsvSinkTable");
 val tableEnv = ... // see "Create a TableEnvironment" section
 
 // create an output Table
-val schema = new Schema()
-    .field("a", DataTypes.INT())
-    .field("b", DataTypes.STRING())
-    .field("c", DataTypes.BIGINT())
+val schema = Schema.newBuilder()
+    .column("a", DataTypes.INT())
+    .column("b", DataTypes.STRING())
+    .column("c", DataTypes.BIGINT())
+    .build()
 
-tableEnv.connect(new FileSystem().path("/path/to/file"))
-    .withFormat(new Csv().fieldDelimiter('|').deriveSchema())
-    .withSchema(schema)
-    .createTemporaryTable("CsvSinkTable")
+tableEnv.createTemporaryTable("CsvSinkTable", TableDescriptor.forConnector("filesystem")
+    .schema(schema)
+    .option("path", "/path/to/file")
+    .format(FormatDescriptor.forFormat("csv")
+        .option("field-delimiter", "|")
+        .build())
+    .build())
 
 // compute a result Table using Table API operators and/or SQL queries
 val result: Table = ...
 
+// Prepare the insert into pipeline
+val pipeline = result.insertInto("CsvSinkTable")
+
+// Print explain details
+pipeline.printExplain()
+
 // emit the result Table to the registered TableSink
-result.executeInsert("CsvSinkTable")
+pipeline.execute()
 
 ```
 {{< /tab >}}
@@ -704,15 +726,19 @@ result.executeInsert("CsvSinkTable")
 table_env = ... # see "Create a TableEnvironment" section
 
 # create a TableSink
-table_env.connect(FileSystem().path("/path/to/file")))
-    .with_format(Csv()
-                 .field_delimiter(',')
-                 .deriveSchema())
-    .with_schema(Schema()
-                 .field("a", DataTypes.INT())
-                 .field("b", DataTypes.STRING())
-                 .field("c", DataTypes.BIGINT()))
-    .create_temporary_table("CsvSinkTable")
+schema = Schema.new_builder()
+    .column("a", DataTypes.INT())
+    .column("b", DataTypes.STRING())
+    .column("c", DataTypes.BIGINT())
+    .build()
+    
+table_env.create_temporary_table("CsvSinkTable", TableDescriptor.for_connector("filesystem")
+    .schema(schema)
+    .option("path", "/path/to/file")
+    .format(FormatDescriptor.for_format("csv")
+        .option("field-delimiter", "|")
+        .build())
+    .build())
 
 # compute a result Table using Table API operators and/or SQL queries
 result = ...
@@ -740,9 +766,9 @@ result.execute_insert("CsvSinkTable")
 Table API 或者 SQL 查询在下列情况下会被翻译：
 
 * 当 `TableEnvironment.executeSql()` 被调用时。该方法是用来执行一个 SQL 语句，一旦该方法被调用， SQL 语句立即被翻译。
-* 当 `Table.executeInsert()` 被调用时。该方法是用来将一个表的内容插入到目标表中，一旦该方法被调用， TABLE API 程序立即被翻译。
+* 当 `TablePipeline.execute()` 被调用时。该方法是用来执行一个源表到输出表的数据流，一旦该方法被调用， TABLE API 程序立即被翻译。
 * 当 `Table.execute()` 被调用时。该方法是用来将一个表的内容收集到本地，一旦该方法被调用， TABLE API 程序立即被翻译。
-* 当 `StatementSet.execute()` 被调用时。`Table` （通过 `StatementSet.addInsert()` 输出给某个 `Sink`）和 INSERT 语句 （通过调用 `StatementSet.addInsertSql()`）会先被缓存到 `StatementSet` 中，`StatementSet.execute()` 方法被调用时，所有的 sink 会被优化成一张有向无环图。
+* 当 `StatementSet.execute()` 被调用时。`TablePipeline` （通过 `StatementSet.add()` 输出给某个 `Sink`）和 INSERT 语句 （通过调用 `StatementSet.addInsertSql()`）会先被缓存到 `StatementSet` 中，`StatementSet.execute()` 方法被调用时，所有的 sink 会被优化成一张有向无环图。
 * 当 `Table` 被转换成 `DataStream` 时（参阅[与 DataStream 集成](#integration-with-datastream)）。转换完成后，它就成为一个普通的 DataStream 程序，并会在调用 `StreamExecutionEnvironment.execute()` 时被执行。
 
 {{< top >}}
@@ -830,7 +856,7 @@ t_env = StreamTableEnvironment.create(env)
 table1 = t_env.from_elements([(1, "hello")], ["count", "word"])
 table2 = t_env.from_elements([(1, "hello")], ["count", "word"])
 table = table1 \
-    .where(table1.word.like('F%')) \
+    .where(col('word').like('F%')) \
     .union_all(table2)
 print(table.explain())
 
@@ -839,7 +865,7 @@ print(table.explain())
 {{< /tabs >}}
 
 上述例子的结果是：
-<div>
+
 ```text
 == Abstract Syntax Tree ==
 LogicalUnion(all=[true])
@@ -859,7 +885,6 @@ Union(all=[true], union=[count, word])
 :  +- DataStreamScan(table=[[Unregistered_DataStream_1]], fields=[count, word])
 +- DataStreamScan(table=[[Unregistered_DataStream_2]], fields=[count, word])
 ```
-</div>
 
 以下代码展示了一个示例以及使用 `StatementSet.explain()` 的多 sink 计划的相应输出：
 
@@ -870,34 +895,39 @@ Union(all=[true], union=[count, word])
 EnvironmentSettings settings = EnvironmentSettings.inStreamingMode();
 TableEnvironment tEnv = TableEnvironment.create(settings);
 
-final Schema schema = new Schema()
-    .field("count", DataTypes.INT())
-    .field("word", DataTypes.STRING());
+final Schema schema = Schema.newBuilder()
+    .column("count", DataTypes.INT())
+    .column("word", DataTypes.STRING())
+    .build();
 
-tEnv.connect(new FileSystem().path("/source/path1"))
-    .withFormat(new Csv().deriveSchema())
-    .withSchema(schema)
-    .createTemporaryTable("MySource1");
-tEnv.connect(new FileSystem().path("/source/path2"))
-    .withFormat(new Csv().deriveSchema())
-    .withSchema(schema)
-    .createTemporaryTable("MySource2");
-tEnv.connect(new FileSystem().path("/sink/path1"))
-    .withFormat(new Csv().deriveSchema())
-    .withSchema(schema)
-    .createTemporaryTable("MySink1");
-tEnv.connect(new FileSystem().path("/sink/path2"))
-    .withFormat(new Csv().deriveSchema())
-    .withSchema(schema)
-    .createTemporaryTable("MySink2");
+tEnv.createTemporaryTable("MySource1", TableDescriptor.forConnector("filesystem")
+    .schema(schema)
+    .option("path", "/source/path1")
+    .format("csv")
+    .build());
+tEnv.createTemporaryTable("MySource2", TableDescriptor.forConnector("filesystem")
+    .schema(schema)
+    .option("path", "/source/path2")
+    .format("csv")
+    .build());
+tEnv.createTemporaryTable("MySink1", TableDescriptor.forConnector("filesystem")
+    .schema(schema)
+    .option("path", "/sink/path1")
+    .format("csv")
+    .build());
+tEnv.createTemporaryTable("MySink2", TableDescriptor.forConnector("filesystem")
+    .schema(schema)
+    .option("path", "/sink/path2")
+    .format("csv")
+    .build());
 
 StatementSet stmtSet = tEnv.createStatementSet();
 
 Table table1 = tEnv.from("MySource1").where($("word").like("F%"));
-stmtSet.addInsert("MySink1", table1);
+stmtSet.add(table1.insertInto("MySink1"));
 
 Table table2 = table1.unionAll(tEnv.from("MySource2"));
-stmtSet.addInsert("MySink2", table2);
+stmtSet.add(table2.insertInto("MySink2"));
 
 String explanation = stmtSet.explain();
 System.out.println(explanation);
@@ -909,34 +939,39 @@ System.out.println(explanation);
 val settings = EnvironmentSettings.inStreamingMode()
 val tEnv = TableEnvironment.create(settings)
 
-val schema = new Schema()
-    .field("count", DataTypes.INT())
-    .field("word", DataTypes.STRING())
+val schema = Schema.newBuilder()
+    .column("count", DataTypes.INT())
+    .column("word", DataTypes.STRING())
+    .build()
 
-tEnv.connect(new FileSystem().path("/source/path1"))
-    .withFormat(new Csv().deriveSchema())
-    .withSchema(schema)
-    .createTemporaryTable("MySource1")
-tEnv.connect(new FileSystem().path("/source/path2"))
-    .withFormat(new Csv().deriveSchema())
-    .withSchema(schema)
-    .createTemporaryTable("MySource2")
-tEnv.connect(new FileSystem().path("/sink/path1"))
-    .withFormat(new Csv().deriveSchema())
-    .withSchema(schema)
-    .createTemporaryTable("MySink1")
-tEnv.connect(new FileSystem().path("/sink/path2"))
-    .withFormat(new Csv().deriveSchema())
-    .withSchema(schema)
-    .createTemporaryTable("MySink2")
+tEnv.createTemporaryTable("MySource1", TableDescriptor.forConnector("filesystem")
+    .schema(schema)
+    .option("path", "/source/path1")
+    .format("csv")
+    .build())
+tEnv.createTemporaryTable("MySource2", TableDescriptor.forConnector("filesystem")
+    .schema(schema)
+    .option("path", "/source/path2")
+    .format("csv")
+    .build())
+tEnv.createTemporaryTable("MySink1", TableDescriptor.forConnector("filesystem")
+    .schema(schema)
+    .option("path", "/sink/path1")
+    .format("csv")
+    .build())
+tEnv.createTemporaryTable("MySink2", TableDescriptor.forConnector("filesystem")
+    .schema(schema)
+    .option("path", "/sink/path2")
+    .format("csv")
+    .build())
 
 val stmtSet = tEnv.createStatementSet()
 
 val table1 = tEnv.from("MySource1").where($"word".like("F%"))
-stmtSet.addInsert("MySink1", table1)
+stmtSet.add(table1.insertInto("MySink1"))
 
 val table2 = table1.unionAll(tEnv.from("MySource2"))
-stmtSet.addInsert("MySink2", table2)
+stmtSet.add(table2.insertInto("MySink2"))
 
 val explanation = stmtSet.explain()
 println(explanation)
@@ -948,26 +983,31 @@ println(explanation)
 settings = EnvironmentSettings.in_streaming_mode()
 t_env = TableEnvironment.create(environment_settings=settings)
 
-schema = Schema()
-    .field("count", DataTypes.INT())
-    .field("word", DataTypes.STRING())
+schema = Schema.new_builder()
+    .column("count", DataTypes.INT())
+    .column("word", DataTypes.STRING())
+    .build()
 
-t_env.connect(FileSystem().path("/source/path1")))
-    .with_format(Csv().deriveSchema())
-    .with_schema(schema)
-    .create_temporary_table("MySource1")
-t_env.connect(FileSystem().path("/source/path2")))
-    .with_format(Csv().deriveSchema())
-    .with_schema(schema)
-    .create_temporary_table("MySource2")
-t_env.connect(FileSystem().path("/sink/path1")))
-    .with_format(Csv().deriveSchema())
-    .with_schema(schema)
-    .create_temporary_table("MySink1")
-t_env.connect(FileSystem().path("/sink/path2")))
-    .with_format(Csv().deriveSchema())
-    .with_schema(schema)
-    .create_temporary_table("MySink2")
+t_env.create_temporary_table("MySource1", TableDescriptor.for_connector("filesystem")
+    .schema(schema)
+    .option("path", "/source/path1")
+    .format("csv")
+    .build())
+t_env.create_temporary_table("MySource2", TableDescriptor.for_connector("filesystem")
+    .schema(schema)
+    .option("path", "/source/path2")
+    .format("csv")
+    .build())
+t_env.create_temporary_table("MySink1", TableDescriptor.for_connector("filesystem")
+    .schema(schema)
+    .option("path", "/sink/path1")
+    .format("csv")
+    .build())
+t_env.create_temporary_table("MySink2", TableDescriptor.for_connector("filesystem")
+    .schema(schema)
+    .option("path", "/sink/path2")
+    .format("csv")
+    .build())
 
 stmt_set = t_env.create_statement_set()
 
@@ -985,7 +1025,7 @@ print(explanation)
 {{< /tabs >}}
 
 多 sink 计划的结果是：
-<div>
+
 ```text
 == Abstract Syntax Tree ==
 LogicalLegacySink(name=[`default_catalog`.`default_database`.`MySink1`], fields=[count, word])
@@ -1022,7 +1062,6 @@ LegacySink(name=[`default_catalog`.`default_database`.`MySink2`], fields=[count,
 +- LegacyTableSourceScan(table=[[default_catalog, default_database, MySource2, source: [CsvTableSource(read fields: count, word)]]], fields=[count, word])
 
 ```
-</div>
 
 {{< top >}}
 

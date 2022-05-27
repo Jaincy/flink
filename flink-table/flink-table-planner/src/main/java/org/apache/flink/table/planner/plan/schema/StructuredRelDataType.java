@@ -54,7 +54,7 @@ public final class StructuredRelDataType extends ObjectSqlType {
 
     private final StructuredType structuredType;
 
-    private StructuredRelDataType(StructuredType structuredType, List<RelDataTypeField> fields) {
+    public StructuredRelDataType(StructuredType structuredType, List<RelDataTypeField> fields) {
         super(
                 SqlTypeName.STRUCTURED,
                 createSqlIdentifier(structuredType),
@@ -157,7 +157,7 @@ public final class StructuredRelDataType extends ObjectSqlType {
 
     private static RelDataTypeComparability createRelDataTypeComparability(
             StructuredType structuredType) {
-        switch (structuredType.getComparision()) {
+        switch (structuredType.getComparison()) {
             case EQUALS:
                 return RelDataTypeComparability.UNORDERED;
             case FULL:
@@ -165,7 +165,7 @@ public final class StructuredRelDataType extends ObjectSqlType {
             case NONE:
                 return RelDataTypeComparability.NONE;
             default:
-                throw new IllegalArgumentException("Unsupported structured type comparision.");
+                throw new IllegalArgumentException("Unsupported structured type comparison.");
         }
     }
 }

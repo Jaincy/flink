@@ -17,54 +17,27 @@
 
 package org.apache.flink.table.codesplit;
 
-import org.apache.flink.util.FileUtils;
-
-import org.junit.Assert;
-import org.junit.Test;
-
-import java.io.File;
+import org.junit.jupiter.api.Test;
 
 /** Tests for {@link IfStatementRewriter}. */
-public class IfStatementRewriterTest {
+class IfStatementRewriterTest extends CodeRewriterTestBase<IfStatementRewriter> {
+
+    public IfStatementRewriterTest() {
+        super("if", code -> new IfStatementRewriter(code, 20));
+    }
 
     @Test
-    public void testIfStatementRewrite() {
+    void testIfStatementRewrite() {
         runTest("TestIfStatementRewrite");
     }
 
     @Test
-    public void testNotRewriteIfStatementInFunctionWithReturnValue() {
+    void testNotRewriteIfStatementInFunctionWithReturnValue() {
         runTest("TestNotRewriteIfStatementInFunctionWithReturnValue");
     }
 
     @Test
-    public void testRewriteInnerClass() {
+    void testRewriteInnerClass() {
         runTest("TestRewriteInnerClass");
-    }
-
-    private void runTest(String filename) {
-        try {
-            String code =
-                    FileUtils.readFileUtf8(
-                            new File(
-                                    IfStatementRewriterTest.class
-                                            .getClassLoader()
-                                            .getResource("if/code/" + filename + ".java")
-                                            .toURI()));
-            String expected =
-                    FileUtils.readFileUtf8(
-                            new File(
-                                    IfStatementRewriterTest.class
-                                            .getClassLoader()
-                                            .getResource("if/expected/" + filename + ".java")
-                                            .toURI()));
-            IfStatementRewriter rewriter = new IfStatementRewriter(code, 20);
-            Assert.assertEquals(expected, rewriter.rewrite());
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        } finally {
-            // we reset the counter to ensure the variable names after rewrite are as expected
-            CodeSplitUtil.getCounter().set(0L);
-        }
     }
 }

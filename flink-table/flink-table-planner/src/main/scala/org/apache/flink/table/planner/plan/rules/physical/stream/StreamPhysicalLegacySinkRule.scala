@@ -15,11 +15,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.flink.table.planner.plan.rules.physical.stream
 
 import org.apache.flink.table.api.TableException
-import org.apache.flink.table.filesystem.FileSystemOptions
 import org.apache.flink.table.planner.plan.`trait`.FlinkRelDistribution
 import org.apache.flink.table.planner.plan.nodes.FlinkConventions
 import org.apache.flink.table.planner.plan.nodes.logical.FlinkLogicalLegacySink
@@ -32,7 +30,8 @@ import org.apache.calcite.rel.convert.ConverterRule
 
 import scala.collection.JavaConversions._
 
-class StreamPhysicalLegacySinkRule extends ConverterRule(
+class StreamPhysicalLegacySinkRule
+  extends ConverterRule(
     classOf[FlinkLogicalLegacySink],
     FlinkConventions.LOGICAL,
     FlinkConventions.STREAM_PHYSICAL,
@@ -47,29 +46,33 @@ class StreamPhysicalLegacySinkRule extends ConverterRule(
         case partitionSink: PartitionableTableSink =>
           partitionSink.setStaticPartition(sink.staticPartitions)
           val dynamicPartFields = sink.catalogTable.getPartitionKeys
-              .filter(!sink.staticPartitions.contains(_))
+            .filter(!sink.staticPartitions.contains(_))
 
           if (dynamicPartFields.nonEmpty) {
             val dynamicPartIndices =
               dynamicPartFields.map(partitionSink.getTableSchema.getFieldNames.indexOf(_))
 
-            val shuffleEnable = sink
-                .catalogTable
-                .getOptions
-                .get(FileSystemOptions.SINK_SHUFFLE_BY_PARTITION.key())
+            // TODO This option is hardcoded to remove the dependency of planner from
+            //  flink-connector-files. We should move this option out of FileSystemConnectorOptions
+            val shuffleEnable = sink.catalogTable.getOptions
+              .getOrDefault("sink.shuffle-by-partition.enable", "false")
 
-            if (shuffleEnable != null && shuffleEnable.toBoolean) {
+            if (shuffleEnable.toBoolean) {
               requiredTraitSet = requiredTraitSet.plus(
-                FlinkRelDistribution.hash(dynamicPartIndices
-                    .map(Integer.valueOf), requireStrict = false))
+                FlinkRelDistribution.hash(
+                  dynamicPartIndices
+                    .map(Integer.valueOf),
+                  requireStrict = false))
             }
 
             if (partitionSink.configurePartitionGrouping(false)) {
               throw new TableException("Partition grouping in stream mode is not supported yet!")
             }
           }
-        case _ => throw new TableException("We need PartitionableTableSink to write data to" +
-            s" partitioned table: ${sink.sinkName}")
+        case _ =>
+          throw new TableException(
+            "We need PartitionableTableSink to write data to" +
+              s" partitioned table: ${sink.sinkName}")
       }
     }
 

@@ -36,14 +36,16 @@ import org.apache.flink.runtime.jobgraph.IntermediateDataSetID;
 import org.apache.flink.runtime.jobgraph.IntermediateResultPartitionID;
 import org.apache.flink.util.TestLogger;
 
-import org.apache.flink.shaded.guava18.com.google.common.collect.ImmutableMap;
+import org.apache.flink.shaded.guava30.com.google.common.collect.ImmutableMap;
 
 import org.junit.Test;
 
+import java.io.IOException;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Map;
 
+import static org.apache.flink.runtime.executiongraph.ExecutionGraphTestUtils.createExecutionAttemptId;
 import static org.apache.flink.runtime.io.network.partition.ResultPartitionType.BLOCKING;
 import static org.apache.flink.runtime.io.network.partition.ResultPartitionType.PIPELINED_BOUNDED;
 import static org.apache.flink.runtime.util.NettyShuffleDescriptorBuilder.createRemoteWithIdAndLocation;
@@ -131,7 +133,8 @@ public class NettyShuffleUtilsTest extends TestLogger {
     private SingleInputGate createInputGate(
             NettyShuffleEnvironment network,
             ResultPartitionType resultPartitionType,
-            int numInputChannels) {
+            int numInputChannels)
+            throws IOException {
 
         ShuffleDescriptor[] shuffleDescriptors = new NettyShuffleDescriptor[numInputChannels];
         for (int i = 0; i < numInputChannels; i++) {
@@ -144,7 +147,7 @@ public class NettyShuffleUtilsTest extends TestLogger {
                 new InputGateDeploymentDescriptor(
                         new IntermediateDataSetID(), resultPartitionType, 0, shuffleDescriptors);
 
-        ExecutionAttemptID consumerID = new ExecutionAttemptID();
+        ExecutionAttemptID consumerID = createExecutionAttemptId();
         Collection<SingleInputGate> inputGates =
                 network.createInputGates(
                         network.createShuffleIOOwnerContext(
@@ -173,10 +176,9 @@ public class NettyShuffleUtilsTest extends TestLogger {
                         numSubpartitions,
                         0);
         ResultPartitionDeploymentDescriptor resultPartitionDeploymentDescriptor =
-                new ResultPartitionDeploymentDescriptor(
-                        partitionDescriptor, shuffleDescriptor, 1, true);
+                new ResultPartitionDeploymentDescriptor(partitionDescriptor, shuffleDescriptor, 1);
 
-        ExecutionAttemptID consumerID = new ExecutionAttemptID();
+        ExecutionAttemptID consumerID = createExecutionAttemptId();
         Collection<ResultPartition> resultPartitions =
                 network.createResultPartitionWriters(
                         network.createShuffleIOOwnerContext(

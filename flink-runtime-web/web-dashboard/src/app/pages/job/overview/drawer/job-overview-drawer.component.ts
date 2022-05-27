@@ -16,13 +16,15 @@
  * limitations under the License.
  */
 
-import { Component, ChangeDetectionStrategy, OnInit, OnDestroy } from '@angular/core';
+import { animate, style, transition, trigger } from '@angular/animations';
+import { ChangeDetectionStrategy, Component, OnDestroy, OnInit } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { combineLatest, Subject } from 'rxjs';
 import { map, takeUntil } from 'rxjs/operators';
-import { JobService } from 'services';
-import { trigger, animate, style, transition } from '@angular/animations';
-import { JobChartService } from 'share/customize/job-chart/job-chart.service';
+
+import { JobChartService } from '@flink-runtime-web/share/customize/job-chart/job-chart.service';
+
+import { JobLocalService } from '../../job-local.service';
 
 @Component({
   selector: 'flink-job-overview-drawer',
@@ -47,7 +49,7 @@ import { JobChartService } from 'share/customize/job-chart/job-chart.service';
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class JobOverviewDrawerComponent implements OnInit, OnDestroy {
-  listOfNavigation = [
+  public readonly listOfNavigation = [
     { title: 'Detail', path: 'detail' },
     { title: 'SubTasks', path: 'subtasks' },
     { title: 'TaskManagers', path: 'taskmanagers' },
@@ -57,11 +59,43 @@ export class JobOverviewDrawerComponent implements OnInit, OnDestroy {
     { title: 'Metrics', path: 'metrics' },
     { title: 'FlameGraph', path: 'flamegraph' }
   ];
-  fullScreen = false;
-  private cachePath = this.listOfNavigation[0].path;
-  private destroy$ = new Subject();
 
-  closeDrawer() {
+  public fullScreen = false;
+
+  private cachePath = this.listOfNavigation[0].path;
+
+  private readonly destroy$ = new Subject<void>();
+
+  constructor(
+    private readonly activatedRoute: ActivatedRoute,
+    private readonly router: Router,
+    private readonly jobLocalService: JobLocalService,
+    private readonly jobChartService: JobChartService
+  ) {}
+
+  public ngOnInit(): void {
+    const nodeId$ = this.activatedRoute.params.pipe(map(item => item.vertexId));
+    combineLatest([this.jobLocalService.jobDetailChanges().pipe(map(item => item.plan.nodes)), nodeId$])
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(([nodes, nodeId]) => {
+        if (!this.activatedRoute.firstChild) {
+          this.router.navigate([this.cachePath], { relativeTo: this.activatedRoute }).then();
+        } else {
+          this.cachePath = this.activatedRoute.firstChild.snapshot.data.path;
+        }
+        if (nodes && nodeId) {
+          this.jobLocalService.setSelectedVertex(nodes.find(item => item.id === nodeId) || null);
+        }
+      });
+  }
+
+  public ngOnDestroy(): void {
+    this.destroy$.next();
+    this.destroy$.complete();
+    this.jobLocalService.setSelectedVertex(null);
+  }
+
+  public closeDrawer(): void {
     if (this.fullScreen) {
       this.fullScreen = false;
       this.jobChartService.resize();
@@ -70,38 +104,8 @@ export class JobOverviewDrawerComponent implements OnInit, OnDestroy {
     }
   }
 
-  fullDrawer() {
+  public fullDrawer(): void {
     this.fullScreen = true;
     this.jobChartService.resize();
-  }
-
-  constructor(
-    private activatedRoute: ActivatedRoute,
-    private router: Router,
-    private jobService: JobService,
-    private jobChartService: JobChartService
-  ) {}
-
-  ngOnInit() {
-    const nodeId$ = this.activatedRoute.params.pipe(map(item => item.vertexId));
-    combineLatest(this.jobService.jobDetail$.pipe(map(item => item.plan.nodes)), nodeId$)
-      .pipe(takeUntil(this.destroy$))
-      .subscribe(data => {
-        const [nodes, nodeId] = data;
-        if (!this.activatedRoute.firstChild) {
-          this.router.navigate([this.cachePath], { relativeTo: this.activatedRoute });
-        } else {
-          this.cachePath = this.activatedRoute.firstChild.snapshot.data.path;
-        }
-        if (nodes && nodeId) {
-          this.jobService.selectedVertex$.next(nodes.find(item => item.id === nodeId));
-        }
-      });
-  }
-
-  ngOnDestroy(): void {
-    this.destroy$.next();
-    this.destroy$.complete();
-    this.jobService.selectedVertex$.next(null);
   }
 }

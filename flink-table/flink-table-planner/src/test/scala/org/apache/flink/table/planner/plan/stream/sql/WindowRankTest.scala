@@ -15,36 +15,33 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.flink.table.planner.plan.stream.sql
 
 import org.apache.flink.table.api.TableException
 import org.apache.flink.table.planner.plan.utils.JavaUserDefinedAggFunctions.WeightedAvgWithMerge
 import org.apache.flink.table.planner.utils.TableTestBase
+
 import org.junit.Test
 
-/**
- * Tests for window rank.
- */
+/** Tests for window rank. */
 class WindowRankTest extends TableTestBase {
 
   private val util = streamTestUtil()
   util.addTemporarySystemFunction("weightedAvg", classOf[WeightedAvgWithMerge])
-  util.tableEnv.executeSql(
-    s"""
-       |CREATE TABLE MyTable (
-       |  a INT,
-       |  b BIGINT,
-       |  c STRING NOT NULL,
-       |  d DECIMAL(10, 3),
-       |  e BIGINT,
-       |  rowtime TIMESTAMP(3),
-       |  proctime as PROCTIME(),
-       |  WATERMARK FOR rowtime AS rowtime - INTERVAL '1' SECOND
-       |) with (
-       |  'connector' = 'values'
-       |)
-       |""".stripMargin)
+  util.tableEnv.executeSql(s"""
+                              |CREATE TABLE MyTable (
+                              |  a INT,
+                              |  b BIGINT,
+                              |  c STRING NOT NULL,
+                              |  d DECIMAL(10, 3),
+                              |  e BIGINT,
+                              |  rowtime TIMESTAMP(3),
+                              |  proctime as PROCTIME(),
+                              |  WATERMARK FOR rowtime AS rowtime - INTERVAL '1' SECOND
+                              |) with (
+                              |  'connector' = 'values'
+                              |)
+                              |""".stripMargin)
 
   // ----------------------------------------------------------------------------------------
   // Tests for queries Rank on window TVF
@@ -81,7 +78,7 @@ class WindowRankTest extends TableTestBase {
   }
 
   @Test
-  def testCantMergeWindowTVF_TumbleOnProctime(): Unit = {
+  def testUnsupportedWindowTVF_TumbleOnProctime(): Unit = {
     val sql =
       """
         |SELECT window_start, window_end, window_time, a, b, c, d, e
@@ -92,7 +89,10 @@ class WindowRankTest extends TableTestBase {
         |)
         |WHERE rownum <= 3
       """.stripMargin
-    util.verifyRelPlan(sql)
+
+    thrown.expectMessage("Processing time Window TopN is not supported yet.")
+    thrown.expect(classOf[TableException])
+    util.verifyExplain(sql)
   }
 
   @Test
@@ -128,7 +128,7 @@ class WindowRankTest extends TableTestBase {
   }
 
   @Test
-  def testCantMergeWindowTVF_HopOnProctime(): Unit = {
+  def testUnsupportedWindowTVF_HopOnProctime(): Unit = {
     val sql =
       """
         |SELECT window_start, window_end, window_time, a, b, c, d, e
@@ -140,7 +140,10 @@ class WindowRankTest extends TableTestBase {
         |)
         |WHERE rownum <= 3
       """.stripMargin
-    util.verifyRelPlan(sql)
+
+    thrown.expectMessage("Processing time Window TopN is not supported yet.")
+    thrown.expect(classOf[TableException])
+    util.verifyExplain(sql)
   }
 
   @Test
@@ -176,7 +179,7 @@ class WindowRankTest extends TableTestBase {
   }
 
   @Test
-  def testCantMergeWindowTVF_CumulateOnProctime(): Unit = {
+  def testUnsupportedWindowTVF_CumulateOnProctime(): Unit = {
     val sql =
       """
         |SELECT window_start, window_end, window_time, a, b, c, d, e
@@ -188,7 +191,10 @@ class WindowRankTest extends TableTestBase {
         |)
         |WHERE rownum <= 3
       """.stripMargin
-    util.verifyRelPlan(sql)
+
+    thrown.expectMessage("Processing time Window TopN is not supported yet.")
+    thrown.expect(classOf[TableException])
+    util.verifyExplain(sql)
   }
 
   // ----------------------------------------------------------------------------------------

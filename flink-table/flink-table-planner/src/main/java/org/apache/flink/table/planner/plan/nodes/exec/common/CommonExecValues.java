@@ -19,14 +19,19 @@
 package org.apache.flink.table.planner.plan.nodes.exec.common;
 
 import org.apache.flink.api.dag.Transformation;
+import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.planner.codegen.ValuesCodeGenerator;
 import org.apache.flink.table.planner.delegation.PlannerBase;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNode;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeBase;
+import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeConfig;
+import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeContext;
 import org.apache.flink.table.planner.plan.nodes.exec.SingleTransformationTranslator;
 import org.apache.flink.table.runtime.operators.values.ValuesInputFormat;
 import org.apache.flink.table.types.logical.RowType;
+
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.annotation.JsonProperty;
 
 import org.apache.calcite.rex.RexLiteral;
 
@@ -36,28 +41,42 @@ import java.util.List;
 /** Base {@link ExecNode} that read records from given values. */
 public abstract class CommonExecValues extends ExecNodeBase<RowData>
         implements SingleTransformationTranslator<RowData> {
+
+    public static final String VALUES_TRANSFORMATION = "values";
+
+    public static final String FIELD_NAME_TUPLES = "tuples";
+
     private final List<List<RexLiteral>> tuples;
 
-    public CommonExecValues(List<List<RexLiteral>> tuples, RowType outputType, String description) {
-        super(Collections.emptyList(), outputType, description);
+    public CommonExecValues(
+            int id,
+            ExecNodeContext context,
+            ReadableConfig persistedConfig,
+            List<List<RexLiteral>> tuples,
+            RowType outputType,
+            String description) {
+        super(id, context, persistedConfig, Collections.emptyList(), outputType, description);
         this.tuples = tuples;
     }
 
     @Override
-    protected Transformation<RowData> translateToPlanInternal(PlannerBase planner) {
+    protected Transformation<RowData> translateToPlanInternal(
+            PlannerBase planner, ExecNodeConfig config) {
         final ValuesInputFormat inputFormat =
                 ValuesCodeGenerator.generatorInputFormat(
-                        planner.getTableConfig(),
-                        (RowType) getOutputType(),
-                        tuples,
-                        getClass().getSimpleName());
+                        config, (RowType) getOutputType(), tuples, getClass().getSimpleName());
         final Transformation<RowData> transformation =
                 planner.getExecEnv()
                         .createInput(inputFormat, inputFormat.getProducedType())
                         .getTransformation();
-        transformation.setName(getDescription());
+        createTransformationMeta(VALUES_TRANSFORMATION, config).fill(transformation);
         transformation.setParallelism(1);
         transformation.setMaxParallelism(1);
         return transformation;
+    }
+
+    @JsonProperty(value = FIELD_NAME_TUPLES)
+    public List<List<RexLiteral>> getTuples() {
+        return tuples;
     }
 }

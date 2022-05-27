@@ -17,10 +17,12 @@
  */
 
 import { Component, ChangeDetectionStrategy, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
-import { NodesItemCorrectInterface } from 'interfaces';
 import { Subject } from 'rxjs';
 import { takeUntil } from 'rxjs/operators';
-import { JobService } from 'services';
+
+import { NodesItemCorrect } from '@flink-runtime-web/interfaces';
+
+import { JobLocalService } from '../../job-local.service';
 
 @Component({
   selector: 'flink-job-overview-drawer-detail',
@@ -29,19 +31,30 @@ import { JobService } from 'services';
   styleUrls: ['./job-overview-drawer-detail.component.less']
 })
 export class JobOverviewDrawerDetailComponent implements OnInit, OnDestroy {
-  destroy$ = new Subject();
-  node: NodesItemCorrectInterface | null;
+  public node: NodesItemCorrect | null;
+  public multilineNameCSS = '';
 
-  constructor(private jobService: JobService, private cdr: ChangeDetectorRef) {}
+  private readonly destroy$ = new Subject<void>();
 
-  ngOnInit() {
-    this.jobService.selectedVertex$.pipe(takeUntil(this.destroy$)).subscribe(node => {
-      this.node = node;
-      this.cdr.markForCheck();
-    });
+  constructor(private readonly jobLocalService: JobLocalService, private readonly cdr: ChangeDetectorRef) {}
+
+  public ngOnInit(): void {
+    this.jobLocalService
+      .selectedVertexChanges()
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(node => {
+        this.node = node;
+        if (this.node != null && this.node.description != null) {
+          if (this.node.description.indexOf('<br/>') > 0) {
+            this.multilineNameCSS = 'name-multi-line';
+            this.node.description = this.node.description.replace(/<br\/>/g, '\n');
+          }
+        }
+        this.cdr.markForCheck();
+      });
   }
 
-  ngOnDestroy(): void {
+  public ngOnDestroy(): void {
     this.destroy$.next();
     this.destroy$.complete();
   }

@@ -28,19 +28,18 @@ import org.apache.flink.runtime.memory.MemoryManager;
 import org.apache.flink.runtime.metrics.MetricNames;
 import org.apache.flink.runtime.rpc.RpcService;
 import org.apache.flink.runtime.rpc.RpcSystem;
-import org.apache.flink.runtime.rpc.akka.AkkaRpcService;
 import org.apache.flink.runtime.taskexecutor.TaskManagerServices;
 import org.apache.flink.runtime.taskexecutor.TaskManagerServicesBuilder;
 import org.apache.flink.runtime.taskexecutor.slot.TestingTaskSlotTable;
 import org.apache.flink.runtime.taskmanager.Task;
 import org.apache.flink.testutils.ClassLoaderUtils;
 import org.apache.flink.util.ChildFirstClassLoader;
+import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.TestLogger;
 import org.apache.flink.util.function.CheckedSupplier;
 
-import org.apache.flink.shaded.guava18.com.google.common.collect.Sets;
+import org.apache.flink.shaded.guava30.com.google.common.collect.Sets;
 
-import akka.actor.ActorSystem;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Assume;
@@ -54,7 +53,6 @@ import java.util.List;
 import static org.apache.flink.runtime.metrics.util.MetricUtils.METRIC_GROUP_FLINK;
 import static org.apache.flink.runtime.metrics.util.MetricUtils.METRIC_GROUP_MANAGED_MEMORY;
 import static org.apache.flink.runtime.metrics.util.MetricUtils.METRIC_GROUP_MEMORY;
-import static org.hamcrest.CoreMatchers.instanceOf;
 import static org.hamcrest.Matchers.is;
 import static org.junit.Assert.assertThat;
 
@@ -82,18 +80,11 @@ public class MetricUtilsTest extends TestLogger {
 
         final RpcService rpcService =
                 MetricUtils.startRemoteMetricsRpcService(
-                        configuration, "localhost", RpcSystem.load());
-        assertThat(rpcService, instanceOf(AkkaRpcService.class));
-
-        final ActorSystem actorSystem = ((AkkaRpcService) rpcService).getActorSystem();
+                        configuration, "localhost", null, RpcSystem.load());
 
         try {
             final int threadPriority =
-                    actorSystem
-                            .settings()
-                            .config()
-                            .getInt("akka.actor.default-dispatcher.thread-priority");
-
+                    rpcService.execute(() -> Thread.currentThread().getPriority()).get();
             assertThat(threadPriority, is(expectedThreadPriority));
         } finally {
             rpcService.stopService().get();
@@ -194,7 +185,8 @@ public class MetricUtilsTest extends TestLogger {
     }
 
     @Test
-    public void testManagedMemoryMetricsInitialization() throws MemoryAllocationException {
+    public void testManagedMemoryMetricsInitialization()
+            throws MemoryAllocationException, FlinkException {
         final int maxMemorySize = 16284;
         final int numberOfAllocatedPages = 2;
         final int pageSize = 4096;
@@ -212,34 +204,38 @@ public class MetricUtilsTest extends TestLogger {
                                         .build())
                         .setManagedMemorySize(maxMemorySize)
                         .build();
+        try {
 
-        List<String> actualSubGroupPath = new ArrayList<>();
-        final InterceptingOperatorMetricGroup metricGroup =
-                new InterceptingOperatorMetricGroup() {
-                    @Override
-                    public MetricGroup addGroup(String name) {
-                        actualSubGroupPath.add(name);
-                        return this;
-                    }
-                };
-        MetricUtils.instantiateFlinkMemoryMetricGroup(
-                metricGroup,
-                taskManagerServices.getTaskSlotTable(),
-                taskManagerServices::getManagedMemorySize);
+            List<String> actualSubGroupPath = new ArrayList<>();
+            final InterceptingOperatorMetricGroup metricGroup =
+                    new InterceptingOperatorMetricGroup() {
+                        @Override
+                        public MetricGroup addGroup(String name) {
+                            actualSubGroupPath.add(name);
+                            return this;
+                        }
+                    };
+            MetricUtils.instantiateFlinkMemoryMetricGroup(
+                    metricGroup,
+                    taskManagerServices.getTaskSlotTable(),
+                    taskManagerServices::getManagedMemorySize);
 
-        Gauge<Number> usedMetric = (Gauge<Number>) metricGroup.get("Used");
-        Gauge<Number> maxMetric = (Gauge<Number>) metricGroup.get("Total");
+            Gauge<Number> usedMetric = (Gauge<Number>) metricGroup.get("Used");
+            Gauge<Number> maxMetric = (Gauge<Number>) metricGroup.get("Total");
 
-        assertThat(usedMetric.getValue().intValue(), is(numberOfAllocatedPages * pageSize));
-        assertThat(maxMetric.getValue().intValue(), is(maxMemorySize));
+            assertThat(usedMetric.getValue().intValue(), is(numberOfAllocatedPages * pageSize));
+            assertThat(maxMetric.getValue().intValue(), is(maxMemorySize));
 
-        assertThat(
-                actualSubGroupPath,
-                is(
-                        Arrays.asList(
-                                METRIC_GROUP_FLINK,
-                                METRIC_GROUP_MEMORY,
-                                METRIC_GROUP_MANAGED_MEMORY)));
+            assertThat(
+                    actualSubGroupPath,
+                    is(
+                            Arrays.asList(
+                                    METRIC_GROUP_FLINK,
+                                    METRIC_GROUP_MEMORY,
+                                    METRIC_GROUP_MANAGED_MEMORY)));
+        } finally {
+            taskManagerServices.shutDown();
+        }
     }
 
     // --------------- utility methods and classes ---------------

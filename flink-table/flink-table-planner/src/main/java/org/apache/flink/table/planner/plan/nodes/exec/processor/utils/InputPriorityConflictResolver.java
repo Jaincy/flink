@@ -19,8 +19,8 @@
 package org.apache.flink.table.planner.plan.nodes.exec.processor.utils;
 
 import org.apache.flink.annotation.Internal;
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.streaming.api.transformations.ShuffleMode;
+import org.apache.flink.configuration.ReadableConfig;
+import org.apache.flink.streaming.api.transformations.StreamExchangeMode;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNode;
 import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
@@ -31,6 +31,8 @@ import org.apache.flink.table.types.logical.RowType;
 import java.util.Collections;
 import java.util.List;
 
+import static org.apache.flink.table.planner.utils.StreamExchangeModeUtils.getBatchStreamExchangeMode;
+
 /**
  * Subclass of the {@link InputPriorityGraphGenerator}.
  *
@@ -40,8 +42,8 @@ import java.util.List;
 @Internal
 public class InputPriorityConflictResolver extends InputPriorityGraphGenerator {
 
-    private final ShuffleMode shuffleMode;
-    private final Configuration configuration;
+    private final StreamExchangeMode exchangeMode;
+    private final ReadableConfig tableConfig;
 
     /**
      * Create a {@link InputPriorityConflictResolver} for the given {@link ExecNode} graph.
@@ -49,17 +51,17 @@ public class InputPriorityConflictResolver extends InputPriorityGraphGenerator {
      * @param roots the first layer of nodes on the output side of the graph
      * @param safeDamBehavior when checking for conflicts we'll ignore the edges with {@link
      *     InputProperty.DamBehavior} stricter or equal than this
-     * @param shuffleMode when a conflict occurs we'll insert an {@link BatchExecExchange} node with
-     *     this shuffleMode to resolve conflict
+     * @param exchangeMode when a conflict occurs we'll insert an {@link BatchExecExchange} node
+     *     with this exchange mode to resolve conflict
      */
     public InputPriorityConflictResolver(
             List<ExecNode<?>> roots,
             InputProperty.DamBehavior safeDamBehavior,
-            ShuffleMode shuffleMode,
-            Configuration configuration) {
+            StreamExchangeMode exchangeMode,
+            ReadableConfig tableConfig) {
         super(roots, Collections.emptySet(), safeDamBehavior);
-        this.shuffleMode = shuffleMode;
-        this.configuration = configuration;
+        this.exchangeMode = exchangeMode;
+        this.tableConfig = tableConfig;
     }
 
     public void detectAndResolve() {
@@ -85,18 +87,22 @@ public class InputPriorityConflictResolver extends InputPriorityGraphGenerator {
                 // we should split it into two nodes
                 BatchExecExchange newExchange =
                         new BatchExecExchange(
-                                inputProperty, (RowType) exchange.getOutputType(), "Exchange");
-                newExchange.setRequiredShuffleMode(shuffleMode);
+                                tableConfig,
+                                inputProperty,
+                                (RowType) exchange.getOutputType(),
+                                "Exchange");
+                newExchange.setRequiredExchangeMode(exchangeMode);
                 newExchange.setInputEdges(exchange.getInputEdges());
                 newNode = newExchange;
             } else {
                 // create new BatchExecExchange with new inputProperty
                 BatchExecExchange newExchange =
                         new BatchExecExchange(
+                                tableConfig,
                                 inputProperty,
                                 (RowType) exchange.getOutputType(),
                                 exchange.getDescription());
-                newExchange.setRequiredShuffleMode(shuffleMode);
+                newExchange.setRequiredExchangeMode(exchangeMode);
                 newExchange.setInputEdges(exchange.getInputEdges());
                 newNode = newExchange;
             }
@@ -136,8 +142,11 @@ public class InputPriorityConflictResolver extends InputPriorityGraphGenerator {
                         .build();
         BatchExecExchange exchange =
                 new BatchExecExchange(
-                        newInputProperty, (RowType) inputNode.getOutputType(), "Exchange");
-        exchange.setRequiredShuffleMode(shuffleMode);
+                        tableConfig,
+                        newInputProperty,
+                        (RowType) inputNode.getOutputType(),
+                        "Exchange");
+        exchange.setRequiredExchangeMode(exchangeMode);
         ExecEdge execEdge = ExecEdge.builder().source(inputNode).target(exchange).build();
         exchange.setInputEdges(Collections.singletonList(execEdge));
         return exchange;
@@ -168,7 +177,7 @@ public class InputPriorityConflictResolver extends InputPriorityGraphGenerator {
     }
 
     private InputProperty.DamBehavior getDamBehavior() {
-        if (BatchExecExchange.getShuffleMode(configuration, shuffleMode) == ShuffleMode.BATCH) {
+        if (getBatchStreamExchangeMode(tableConfig, exchangeMode) == StreamExchangeMode.BATCH) {
             return InputProperty.DamBehavior.BLOCKING;
         } else {
             return InputProperty.DamBehavior.PIPELINED;

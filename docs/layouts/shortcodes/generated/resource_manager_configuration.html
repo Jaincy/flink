@@ -24,7 +24,7 @@
             <td><h5>resourcemanager.standalone.start-up-time</h5></td>
             <td style="word-wrap: break-word;">-1</td>
             <td>Long</td>
-            <td>Time in milliseconds of the start-up period of a standalone cluster. During this time, resource manager of the standalone cluster expects new task executors to be registered, and will not fail slot requests that can not be satisfied by any current registered slots. After this time, it will fail pending and new coming requests immediately that can not be satisfied by registered slots. If not set, 'slotmanager.request-timeout' will be used by default.</td>
+            <td>Time in milliseconds of the start-up period of a standalone cluster. During this time, resource manager of the standalone cluster expects new task executors to be registered, and will not fail slot requests that can not be satisfied by any current registered slots. After this time, it will fail pending and new coming requests immediately that can not be satisfied by registered slots. If not set, <code class="highlighter-rouge">slot.request.timeout</code> will be used by default.</td>
         </tr>
         <tr>
             <td><h5>resourcemanager.start-worker.max-failure-rate</h5></td>
@@ -49,6 +49,18 @@
             <td style="word-wrap: break-word;">30000</td>
             <td>Long</td>
             <td>The timeout for an idle task manager to be released.</td>
+        </tr>
+        <tr>
+            <td><h5>slotmanager.max-total-resource.cpu</h5></td>
+            <td style="word-wrap: break-word;">(none)</td>
+            <td>Double</td>
+            <td>Maximum cpu cores the Flink cluster allocates for slots. Resources for JobManager and TaskManager framework are excluded. If not configured, it will be derived from 'slotmanager.number-of-slots.max'.</td>
+        </tr>
+        <tr>
+            <td><h5>slotmanager.max-total-resource.memory</h5></td>
+            <td style="word-wrap: break-word;">(none)</td>
+            <td>MemorySize</td>
+            <td>Maximum memory size the Flink cluster allocates for slots. Resources for JobManager and TaskManager framework are excluded. If not configured, it will be derived from 'slotmanager.number-of-slots.max'.</td>
         </tr>
         <tr>
             <td><h5>slotmanager.number-of-slots.max</h5></td>

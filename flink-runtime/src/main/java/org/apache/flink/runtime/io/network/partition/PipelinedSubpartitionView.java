@@ -80,23 +80,37 @@ public class PipelinedSubpartitionView implements ResultSubpartitionView {
     }
 
     @Override
-    public void acknowledgeAllRecordsProcessed() {
-        parent.acknowledgeAllRecordsProcessed();
+    public void acknowledgeAllDataProcessed() {
+        parent.acknowledgeAllDataProcessed();
     }
 
     @Override
-    public boolean isAvailable(int numCreditsAvailable) {
-        return parent.isAvailable(numCreditsAvailable);
+    public AvailabilityWithBacklog getAvailabilityAndBacklog(int numCreditsAvailable) {
+        return parent.getAvailabilityAndBacklog(numCreditsAvailable);
     }
 
     @Override
     public Throwable getFailureCause() {
-        return parent.getFailureCause();
+        Throwable cause = parent.getFailureCause();
+        if (cause != null) {
+            return new ProducerFailedException(cause);
+        }
+        return null;
     }
 
     @Override
     public int unsynchronizedGetNumberOfQueuedBuffers() {
         return parent.unsynchronizedGetNumberOfQueuedBuffers();
+    }
+
+    @Override
+    public int getNumberOfQueuedBuffers() {
+        return parent.getNumberOfQueuedBuffers();
+    }
+
+    @Override
+    public void notifyNewBufferSize(int newBufferSize) {
+        parent.bufferSize(newBufferSize);
     }
 
     @Override

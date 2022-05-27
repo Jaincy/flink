@@ -28,6 +28,8 @@ import org.apache.flink.streaming.api.CheckpointingMode;
 
 import java.time.Duration;
 
+import static org.apache.flink.configuration.description.LinkElement.link;
+
 /**
  * Execution {@link ConfigOption} for configuring checkpointing related parameters.
  *
@@ -77,33 +79,30 @@ public class ExecutionCheckpointingOptions {
                                                     + "sure that a minimum amount of time passes where no checkpoint is in progress at all.")
                                     .build());
 
-    public static final ConfigOption<Boolean> PREFER_CHECKPOINT_FOR_RECOVERY =
-            ConfigOptions.key("execution.checkpointing.prefer-checkpoint-for-recovery")
-                    .booleanType()
-                    .defaultValue(false)
-                    .withDescription(
-                            "If enabled, a job recovery should fallback to checkpoint when there is a more recent "
-                                    + "savepoint.");
-
     public static final ConfigOption<Integer> TOLERABLE_FAILURE_NUMBER =
             ConfigOptions.key("execution.checkpointing.tolerable-failed-checkpoints")
                     .intType()
                     .noDefaultValue()
                     .withDescription(
-                            "The tolerable checkpoint failure number. If set to 0, that means "
-                                    + "we do not tolerance any checkpoint failure.");
+                            "The tolerable checkpoint consecutive failure number. If set to 0, that means "
+                                    + "we do not tolerance any checkpoint failure. This only applies to the following failure reasons: IOException on the "
+                                    + "Job Manager, failures in the async phase on the Task Managers and checkpoint expiration due to a timeout. Failures "
+                                    + "originating from the sync phase on the Task Managers are always forcing failover of an affected task. Other types of "
+                                    + "checkpoint failures (such as checkpoint being subsumed) are being ignored.");
 
     public static final ConfigOption<CheckpointConfig.ExternalizedCheckpointCleanup>
             EXTERNALIZED_CHECKPOINT =
                     ConfigOptions.key("execution.checkpointing.externalized-checkpoint-retention")
                             .enumType(CheckpointConfig.ExternalizedCheckpointCleanup.class)
-                            .noDefaultValue()
+                            .defaultValue(
+                                    CheckpointConfig.ExternalizedCheckpointCleanup
+                                            .NO_EXTERNALIZED_CHECKPOINTS)
                             .withDescription(
                                     Description.builder()
                                             .text(
                                                     "Externalized checkpoints write their meta data out to persistent storage and are not "
                                                             + "automatically cleaned up when the owning job fails or is suspended (terminating with job "
-                                                            + "status %s or %s. In this case, you have to manually clean up the checkpoint state, both the "
+                                                            + "status %s or %s). In this case, you have to manually clean up the checkpoint state, both the "
                                                             + "meta data and actual program state.",
                                                     TextElement.code("JobStatus#FAILED"),
                                                     TextElement.code("JobStatus#SUSPENDED"))
@@ -237,5 +236,19 @@ public class ExecutionCheckpointingOptions {
                                                     + "there is explicit needs to restore from "
                                                     + "the specific checkpoint without in-flight data.")
                                     .linebreak()
+                                    .build());
+
+    public static final ConfigOption<Boolean> ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH =
+            ConfigOptions.key("execution.checkpointing.checkpoints-after-tasks-finish.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            Description.builder()
+                                    .text(
+                                            "Feature toggle for enabling checkpointing even if some of tasks"
+                                                    + " have finished. Before you enable it, please take a look at %s ",
+                                            link(
+                                                    "{{.Site.BaseURL}}{{.Site.LanguagePrefix}}/docs/dev/datastream/fault-tolerance/checkpointing/#checkpointing-with-parts-of-the-graph-finished-beta",
+                                                    "the important considerations"))
                                     .build());
 }

@@ -18,10 +18,19 @@
 
 package org.apache.flink.table.runtime.generated;
 
+import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.ReadableConfig;
+
 /** Describes a generated {@link Projection}. */
 public class GeneratedProjection extends GeneratedClass<Projection> {
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 2L;
+
+    @VisibleForTesting
+    public GeneratedProjection(String className, String code, Object[] references) {
+        super(className, code, references, new Configuration());
+    }
 
     /**
      * Creates a GeneratedProjection.
@@ -29,8 +38,10 @@ public class GeneratedProjection extends GeneratedClass<Projection> {
      * @param className class name of the generated Function.
      * @param code code of the generated Function.
      * @param references referenced objects of the generated Function.
+     * @param conf configuration when generating Function.
      */
-    public GeneratedProjection(String className, String code, Object[] references) {
-        super(className, code, references);
+    public GeneratedProjection(
+            String className, String code, Object[] references, ReadableConfig conf) {
+        super(className, code, references, conf);
     }
 }

@@ -257,7 +257,10 @@ public class DeclarativeSlotManager implements SlotManager {
     @Override
     public void processResourceRequirements(ResourceRequirements resourceRequirements) {
         checkInit();
-        if (resourceRequirements.getResourceRequirements().isEmpty()) {
+        if (resourceRequirements.getResourceRequirements().isEmpty()
+                && resourceTracker.isRequirementEmpty(resourceRequirements.getJobId())) {
+            return;
+        } else if (resourceRequirements.getResourceRequirements().isEmpty()) {
             LOG.info("Clearing resource requirements of job {}", resourceRequirements.getJobId());
         } else {
             LOG.info(
@@ -647,7 +650,10 @@ public class DeclarativeSlotManager implements SlotManager {
                     pendingSlots = allocationResult.getNewAvailableResources();
                     if (!allocationResult.isSuccessfulAllocating()
                             && sendNotEnoughResourceNotifications) {
-                        LOG.warn("Could not fulfill resource requirements of job {}.", jobId);
+                        LOG.warn(
+                                "Could not fulfill resource requirements of job {}. Free slots: {}",
+                                jobId,
+                                slotTracker.getFreeSlots().size());
                         resourceActions.notifyNotEnoughResourcesAvailable(
                                 jobId, resourceTracker.getAcquiredResources(jobId));
                         return pendingSlots;
@@ -750,12 +756,6 @@ public class DeclarativeSlotManager implements SlotManager {
     public Collection<SlotInfo> getAllocatedSlotsOf(InstanceID instanceID) {
         // This information is currently not supported for this slot manager.
         return Collections.emptyList();
-    }
-
-    @Override
-    public int getNumberPendingSlotRequests() {
-        // only exists for testing purposes
-        throw new UnsupportedOperationException();
     }
 
     // ---------------------------------------------------------------------------------------------

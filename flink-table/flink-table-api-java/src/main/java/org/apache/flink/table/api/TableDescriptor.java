@@ -51,19 +51,19 @@ import java.util.stream.Collectors;
  * TableEnvironment#createTemporaryTable(String, TableDescriptor)}.
  */
 @PublicEvolving
-public final class TableDescriptor {
+public class TableDescriptor {
 
-    private final Schema schema;
+    private final @Nullable Schema schema;
     private final Map<String, String> options;
     private final List<String> partitionKeys;
     private final @Nullable String comment;
 
-    private TableDescriptor(
-            Schema schema,
+    protected TableDescriptor(
+            @Nullable Schema schema,
             Map<String, String> options,
             List<String> partitionKeys,
             @Nullable String comment) {
-        this.schema = Preconditions.checkNotNull(schema, "Table descriptors require a schema.");
+        this.schema = schema;
         this.options = Collections.unmodifiableMap(options);
         this.partitionKeys = Collections.unmodifiableList(partitionKeys);
         this.comment = comment;
@@ -81,8 +81,15 @@ public final class TableDescriptor {
         return descriptorBuilder;
     }
 
-    public Schema getSchema() {
-        return schema;
+    /** Creates a new {@link Builder} for a managed table. */
+    public static Builder forManaged() {
+        return new Builder();
+    }
+
+    // ---------------------------------------------------------------------------------------------
+
+    public Optional<Schema> getSchema() {
+        return Optional.ofNullable(schema);
     }
 
     public Map<String, String> getOptions() {
@@ -95,6 +102,28 @@ public final class TableDescriptor {
 
     public Optional<String> getComment() {
         return Optional.ofNullable(comment);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+
+    /** Converts this descriptor into a {@link CatalogTable}. */
+    public CatalogTable toCatalogTable() {
+        final Schema schema =
+                getSchema()
+                        .orElseThrow(
+                                () ->
+                                        new ValidationException(
+                                                "Missing schema in TableDescriptor. "
+                                                        + "A schema is typically required. "
+                                                        + "It can only be omitted at certain "
+                                                        + "documented locations."));
+
+        return CatalogTable.of(schema, getComment().orElse(null), getPartitionKeys(), getOptions());
+    }
+
+    /** Converts this immutable instance into a mutable {@link Builder}. */
+    public Builder toBuilder() {
+        return new Builder(this);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -123,7 +152,10 @@ public final class TableDescriptor {
 
         return String.format(
                 "%s%nCOMMENT '%s'%n%s%nWITH (%n%s%n)",
-                schema, comment != null ? comment : "", partitionedBy, serializedOptions);
+                schema != null ? schema : "",
+                comment != null ? comment : "",
+                partitionedBy,
+                serializedOptions);
     }
 
     @Override
@@ -151,20 +183,34 @@ public final class TableDescriptor {
     // ---------------------------------------------------------------------------------------------
 
     /** Builder for {@link TableDescriptor}. */
+    @PublicEvolving
     public static class Builder {
 
-        private Schema schema;
-        private final Map<String, String> options = new HashMap<>();
-        private final List<String> partitionKeys = new ArrayList<>();
+        private @Nullable Schema schema;
+        private final Map<String, String> options;
+        private final List<String> partitionKeys;
         private @Nullable String comment;
 
-        private Builder() {
-            // no external instantiation
+        protected Builder() {
+            this.options = new HashMap<>();
+            this.partitionKeys = new ArrayList<>();
         }
 
-        /** Define the schema of the {@link TableDescriptor}. */
-        public Builder schema(Schema schema) {
-            this.schema = Preconditions.checkNotNull(schema, "Schema must not be null.");
+        protected Builder(TableDescriptor descriptor) {
+            this.schema = descriptor.getSchema().orElse(null);
+            this.options = new HashMap<>(descriptor.getOptions());
+            this.partitionKeys = new ArrayList<>(descriptor.getPartitionKeys());
+            this.comment = descriptor.getComment().orElse(null);
+        }
+
+        /**
+         * Define the schema of the {@link TableDescriptor}.
+         *
+         * <p>The schema is typically required. It is optional only in cases where the schema can be
+         * inferred, e.g. {@link Table#insertInto(TableDescriptor)}.
+         */
+        public Builder schema(@Nullable Schema schema) {
+            this.schema = schema;
             return this;
         }
 

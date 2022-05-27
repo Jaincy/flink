@@ -16,10 +16,10 @@
 # limitations under the License.
 ################################################################################
 from abc import ABC, abstractmethod
-from typing import TypeVar, Generic, Tuple, Collection, Iterable
+from typing import TypeVar, Generic, Collection, Iterable
 
 from pyflink.datastream import MergingWindowAssigner
-from pyflink.datastream.state import ListState
+from pyflink.datastream.state import MapState
 
 W = TypeVar("W")
 
@@ -45,11 +45,11 @@ class MergingWindowSet(Generic[W]):
                   merged_state_windows: Collection[W]):
             pass
 
-    def __init__(self, assigner: MergingWindowAssigner, state: ListState[Tuple[W, W]]):
+    def __init__(self, assigner: MergingWindowAssigner, state: MapState[W, W]):
         self._window_assigner = assigner
         self._mapping = dict()
 
-        for window_for_user, window_in_state in state:
+        for window_for_user, window_in_state in state.items():
             self._mapping[window_for_user] = window_in_state
 
         self._state = state
@@ -59,7 +59,7 @@ class MergingWindowSet(Generic[W]):
         if self._mapping != self._initial_mapping:
             self._state.clear()
             for window_for_user, window_in_state in self._mapping.items():
-                self._state.add((window_for_user, window_in_state))
+                self._state.put(window_for_user, window_in_state)
 
     def get_state_window(self, window: W) -> W:
         if window in self._mapping:
@@ -102,7 +102,7 @@ class MergingWindowSet(Generic[W]):
             self._mapping[merge_result] = merged_state_window
             merged_state_windows.remove(merged_state_window)
 
-            if merge_result not in merged_windows and len(merged_windows) == 1:
+            if merge_result not in merged_windows or len(merged_windows) != 1:
                 merge_function.merge(
                     merge_result,
                     merged_windows,

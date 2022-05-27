@@ -17,69 +17,42 @@
 
 package org.apache.flink.table.codesplit;
 
-import org.apache.flink.util.FileUtils;
-
-import org.junit.Assert;
-import org.junit.Test;
-
-import java.io.File;
+import org.junit.jupiter.api.Test;
 
 /** Tests for {@link MemberFieldRewriter}. */
-public class MemberFieldRewriterTest {
+class MemberFieldRewriterTest extends CodeRewriterTestBase<MemberFieldRewriter> {
+
+    public MemberFieldRewriterTest() {
+        super("member", code -> new MemberFieldRewriter(code, 3));
+    }
 
     @Test
-    public void testRewriteMemberField() {
+    void testRewriteMemberField() {
         runTest("TestRewriteMemberField");
     }
 
     @Test
-    public void testRewriteGenericType() {
+    void testRewriteGenericType() {
         runTest("TestRewriteGenericType");
     }
 
     @Test
-    public void testNotRewriteFunctionParameter() {
+    void testNotRewriteFunctionParameter() {
         runTest("TestNotRewriteFunctionParameter");
     }
 
     @Test
-    public void testNotRewriteLocalVariable() {
+    void testNotRewriteLocalVariable() {
         runTest("TestNotRewriteLocalVariable");
     }
 
     @Test
-    public void testNotRewriteStaticMember() {
-        runTest("TestNotRewriteStaticMember");
+    void testNotRewriteMember() {
+        runTest("TestNotRewriteMember");
     }
 
     @Test
-    public void testRewriteInnerClass() {
+    void testRewriteInnerClass() {
         runTest("TestRewriteInnerClass");
-    }
-
-    private void runTest(String filename) {
-        try {
-            String code =
-                    FileUtils.readFileUtf8(
-                            new File(
-                                    MemberFieldRewriterTest.class
-                                            .getClassLoader()
-                                            .getResource("member/code/" + filename + ".java")
-                                            .toURI()));
-            String expected =
-                    FileUtils.readFileUtf8(
-                            new File(
-                                    MemberFieldRewriterTest.class
-                                            .getClassLoader()
-                                            .getResource("member/expected/" + filename + ".java")
-                                            .toURI()));
-            MemberFieldRewriter rewriter = new MemberFieldRewriter(code, 3);
-            Assert.assertEquals(expected, rewriter.rewrite());
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        } finally {
-            // we reset the counter to ensure the variable names after rewrite are as expected
-            CodeSplitUtil.getCounter().set(0L);
-        }
     }
 }

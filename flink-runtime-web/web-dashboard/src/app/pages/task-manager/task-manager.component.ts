@@ -19,8 +19,11 @@
 import { ChangeDetectionStrategy, ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { Subject } from 'rxjs';
-import { flatMap, takeUntil } from 'rxjs/operators';
-import { StatusService, TaskManagerService } from 'services';
+import { mergeMap, takeUntil } from 'rxjs/operators';
+
+import { StatusService, TaskManagerService } from '@flink-runtime-web/services';
+
+import { TaskManagerLocalService } from './task-manager-local.service';
 
 @Component({
   selector: 'flink-task-manager',
@@ -29,25 +32,27 @@ import { StatusService, TaskManagerService } from 'services';
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class TaskManagerComponent implements OnInit, OnDestroy {
-  destroy$ = new Subject();
-  isLoading = true;
+  public isLoading = true;
+
+  private readonly destroy$ = new Subject<void>();
 
   constructor(
-    private cdr: ChangeDetectorRef,
-    private activatedRoute: ActivatedRoute,
-    private taskManagerService: TaskManagerService,
-    private statusService: StatusService
+    private readonly cdr: ChangeDetectorRef,
+    private readonly activatedRoute: ActivatedRoute,
+    private readonly taskManagerService: TaskManagerService,
+    private readonly taskManagerLocalService: TaskManagerLocalService,
+    private readonly statusService: StatusService
   ) {}
 
-  ngOnInit() {
+  public ngOnInit(): void {
     this.statusService.refresh$
       .pipe(
-        takeUntil(this.destroy$),
-        flatMap(() => this.taskManagerService.loadManager(this.activatedRoute.snapshot.params.taskManagerId))
+        mergeMap(() => this.taskManagerService.loadManager(this.activatedRoute.snapshot.params.taskManagerId)),
+        takeUntil(this.destroy$)
       )
       .subscribe(
         data => {
-          this.taskManagerService.taskManagerDetail$.next(data);
+          this.taskManagerLocalService.setTaskManagerDetail(data);
           this.isLoading = false;
           this.cdr.markForCheck();
         },
@@ -58,7 +63,7 @@ export class TaskManagerComponent implements OnInit, OnDestroy {
       );
   }
 
-  ngOnDestroy() {
+  public ngOnDestroy(): void {
     this.destroy$.next();
     this.destroy$.complete();
   }

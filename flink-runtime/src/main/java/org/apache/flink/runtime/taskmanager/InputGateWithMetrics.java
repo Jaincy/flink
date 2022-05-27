@@ -86,8 +86,18 @@ public class InputGateWithMetrics extends IndexedInputGate {
     }
 
     @Override
+    public void triggerDebloating() {
+        inputGate.triggerDebloating();
+    }
+
+    @Override
     public boolean isFinished() {
         return inputGate.isFinished();
+    }
+
+    @Override
+    public EndOfDataStatus hasReceivedEndOfData() {
+        return inputGate.hasReceivedEndOfData();
     }
 
     @Override
@@ -141,7 +151,10 @@ public class InputGateWithMetrics extends IndexedInputGate {
     }
 
     private BufferOrEvent updateMetrics(BufferOrEvent bufferOrEvent) {
-        numBytesIn.inc(bufferOrEvent.getSize());
+        int incomingDataSize = bufferOrEvent.getSize();
+
+        numBytesIn.inc(incomingDataSize);
+
         return bufferOrEvent;
     }
 }

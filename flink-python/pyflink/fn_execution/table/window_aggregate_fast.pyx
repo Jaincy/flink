@@ -25,16 +25,15 @@ from pyflink.fn_execution.table.aggregate_fast cimport DistinctViewDescriptor, R
 from pyflink.fn_execution.coder_impl_fast cimport InternalRowKind
 
 import datetime
-import sys
 from typing import List, Dict
 
 import pytz
-from apache_beam.coders import PickleCoder, Coder
 
-from pyflink.fn_execution.datastream.timerservice_impl import InternalTimerServiceImpl
+from pyflink.common.constants import MAX_LONG_VALUE
+from pyflink.fn_execution.datastream.timerservice_impl import LegacyInternalTimerServiceImpl
+from pyflink.fn_execution.coders import PickleCoder
 from pyflink.fn_execution.table.state_data_view import DataViewSpec, ListViewSpec, MapViewSpec, \
     PerWindowStateDataViewStore
-from pyflink.fn_execution.state_impl import RemoteKeyedStateBackend
 from pyflink.fn_execution.table.window_assigner import WindowAssigner, PanedWindowAssigner, \
     MergingWindowAssigner
 from pyflink.fn_execution.table.window_context import WindowContext, TriggerContext, K, W
@@ -42,8 +41,6 @@ from pyflink.fn_execution.table.window_process_function import GeneralWindowProc
     InternalWindowProcessFunction, PanedWindowProcessFunction, MergingWindowProcessFunction
 from pyflink.fn_execution.table.window_trigger import Trigger
 from pyflink.table.udf import ImperativeAggregateFunction
-
-MAX_LONG_VALUE = sys.maxsize
 
 cdef InternalRow join_row(list left, list right, InternalRowKind row_kind):
     return InternalRow(left.__add__(right), row_kind)
@@ -169,13 +166,13 @@ cdef class SimpleNamespaceAggsHandleFunction(NamespaceAggsHandleFunction):
                     data_views[data_view_spec.field_index] = \
                         state_data_view_store.get_state_list_view(
                             data_view_spec.state_id,
-                            PickleCoder())
+                            data_view_spec.element_coder)
                 elif isinstance(data_view_spec, MapViewSpec):
                     data_views[data_view_spec.field_index] = \
                         state_data_view_store.get_state_map_view(
                             data_view_spec.state_id,
-                            PickleCoder(),
-                            PickleCoder())
+                            data_view_spec.key_coder,
+                            data_view_spec.value_coder)
             self._udf_data_views.append(data_views)
         for key in self._distinct_view_descriptors.keys():
             self._distinct_data_views[key] = state_data_view_store.get_state_map_view(
@@ -329,8 +326,8 @@ cdef class GroupWindowAggFunctionBase:
     def __init__(self,
                  allowed_lateness: int,
                  key_selector: RowKeySelector,
-                 state_backend: RemoteKeyedStateBackend,
-                 state_value_coder: Coder,
+                 state_backend,
+                 state_value_coder,
                  window_assigner: WindowAssigner[W],
                  window_aggregator: NamespaceAggsHandleFunctionBase,
                  trigger: Trigger[W],
@@ -345,14 +342,14 @@ cdef class GroupWindowAggFunctionBase:
         self._rowtime_index = rowtime_index
         self._shift_timezone = shift_timezone
         self._window_function = None  # type: InternalWindowProcessFunction[K, W]
-        self._internal_timer_service = None  # type: InternalTimerServiceImpl
+        self._internal_timer_service = None  # type: LegacyInternalTimerServiceImpl
         self._window_context = None  # type: WindowContext
         self._trigger = trigger
         self._trigger_context = None  # type: TriggerContext
         self._window_state = self._state_backend.get_value_state("window_state", state_value_coder)
 
     cpdef void open(self, object function_context):
-        self._internal_timer_service = InternalTimerServiceImpl(self._state_backend)
+        self._internal_timer_service = LegacyInternalTimerServiceImpl(self._state_backend)
         self._window_aggregator.open(
             PerWindowStateDataViewStore(function_context, self._state_backend))
 
@@ -510,8 +507,8 @@ cdef class GroupWindowAggFunction(GroupWindowAggFunctionBase):
     def __init__(self,
                  allowed_lateness: int,
                  key_selector: RowKeySelector,
-                 state_backend: RemoteKeyedStateBackend,
-                 state_value_coder: Coder,
+                 state_backend,
+                 state_value_coder,
                  window_assigner: WindowAssigner[W],
                  window_aggregator: NamespaceAggsHandleFunction[W],
                  trigger: Trigger[W],

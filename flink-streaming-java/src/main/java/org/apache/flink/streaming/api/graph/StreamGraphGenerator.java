@@ -19,6 +19,7 @@
 package org.apache.flink.streaming.api.graph;
 
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.BatchShuffleMode;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.api.common.cache.DistributedCache;
@@ -27,9 +28,12 @@ import org.apache.flink.api.common.operators.util.SlotSharingGroupUtils;
 import org.apache.flink.api.connector.source.Boundedness;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.configuration.ClusterOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.ExecutionOptions;
+import org.apache.flink.configuration.IllegalConfigurationException;
 import org.apache.flink.configuration.MemorySize;
+import org.apache.flink.configuration.PipelineOptions;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.runtime.clusterframework.types.ResourceProfile;
@@ -40,6 +44,7 @@ import org.apache.flink.runtime.state.KeyGroupRangeAssignment;
 import org.apache.flink.runtime.state.StateBackend;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.environment.CheckpointConfig;
+import org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions;
 import org.apache.flink.streaming.api.operators.sorted.state.BatchExecutionCheckpointStorage;
 import org.apache.flink.streaming.api.operators.sorted.state.BatchExecutionInternalTimeServiceManager;
 import org.apache.flink.streaming.api.operators.sorted.state.BatchExecutionStateBackend;
@@ -88,6 +93,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -132,7 +138,9 @@ public class StreamGraphGenerator {
     public static final TimeCharacteristic DEFAULT_TIME_CHARACTERISTIC =
             TimeCharacteristic.ProcessingTime;
 
-    public static final String DEFAULT_JOB_NAME = "Flink Streaming Job";
+    public static final String DEFAULT_STREAMING_JOB_NAME = "Flink Streaming Job";
+
+    public static final String DEFAULT_BATCH_JOB_NAME = "Flink Batch Job";
 
     public static final String DEFAULT_SLOT_SHARING_GROUP = "default";
 
@@ -162,13 +170,9 @@ public class StreamGraphGenerator {
 
     private TimeCharacteristic timeCharacteristic = DEFAULT_TIME_CHARACTERISTIC;
 
-    private String jobName = DEFAULT_JOB_NAME;
-
     private SavepointRestoreSettings savepointRestoreSettings;
 
-    private long defaultBufferTimeout = StreamingJobGraphGenerator.UNDEFINED_NETWORK_BUFFER_TIMEOUT;
-
-    private RuntimeExecutionMode runtimeExecutionMode = RuntimeExecutionMode.STREAMING;
+    private long defaultBufferTimeout = ExecutionOptions.BUFFER_TIMEOUT.defaultValue().toMillis();
 
     private boolean shouldExecuteInBatchMode;
 
@@ -238,12 +242,6 @@ public class StreamGraphGenerator {
         this.savepointRestoreSettings = SavepointRestoreSettings.fromConfiguration(configuration);
     }
 
-    public StreamGraphGenerator setRuntimeExecutionMode(
-            final RuntimeExecutionMode runtimeExecutionMode) {
-        this.runtimeExecutionMode = checkNotNull(runtimeExecutionMode);
-        return this;
-    }
-
     public StreamGraphGenerator setSavepointDir(Path savepointDir) {
         this.savepointDir = savepointDir;
         return this;
@@ -281,11 +279,6 @@ public class StreamGraphGenerator {
         return this;
     }
 
-    public StreamGraphGenerator setJobName(String jobName) {
-        this.jobName = jobName;
-        return this;
-    }
-
     /**
      * Specify fine-grained resource requirements for slot sharing groups.
      *
@@ -311,16 +304,21 @@ public class StreamGraphGenerator {
 
     public StreamGraph generate() {
         streamGraph = new StreamGraph(executionConfig, checkpointConfig, savepointRestoreSettings);
-        shouldExecuteInBatchMode = shouldExecuteInBatchMode(runtimeExecutionMode);
+        streamGraph.setEnableCheckpointsAfterTasksFinish(
+                configuration.get(
+                        ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH));
+        shouldExecuteInBatchMode = shouldExecuteInBatchMode();
         configureStreamGraph(streamGraph);
 
-        alreadyTransformed = new HashMap<>();
+        alreadyTransformed = new IdentityHashMap<>();
 
         for (Transformation<?> transformation : transformations) {
             transform(transformation);
         }
 
         streamGraph.setSlotSharingGroupResource(slotSharingGroupResources);
+
+        setFineGrainedGlobalStreamExchangeMode(streamGraph);
 
         for (StreamNode node : streamGraph.getStreamNodes()) {
             if (node.getInEdges().stream().anyMatch(this::shouldDisableUnalignedCheckpointing)) {
@@ -350,34 +348,69 @@ public class StreamGraphGenerator {
         graph.setChaining(chaining);
         graph.setUserArtifacts(userArtifacts);
         graph.setTimeCharacteristic(timeCharacteristic);
-        graph.setJobName(jobName);
-        graph.setJobType(shouldExecuteInBatchMode ? JobType.BATCH : JobType.STREAMING);
+        graph.setVertexDescriptionMode(configuration.get(PipelineOptions.VERTEX_DESCRIPTION_MODE));
+        graph.setVertexNameIncludeIndexPrefix(
+                configuration.get(PipelineOptions.VERTEX_NAME_INCLUDE_INDEX_PREFIX));
 
         if (shouldExecuteInBatchMode) {
-
-            if (checkpointConfig.isCheckpointingEnabled()) {
-                LOG.info(
-                        "Disabled Checkpointing. Checkpointing is not supported and not needed when executing jobs in BATCH mode.");
-                checkpointConfig.disableCheckpointing();
-            }
-
-            graph.setGlobalDataExchangeMode(GlobalDataExchangeMode.FORWARD_EDGES_PIPELINED);
+            configureStreamGraphBatch(graph);
             setDefaultBufferTimeout(-1);
-            setBatchStateBackendAndTimerService(graph);
         } else {
-            graph.setStateBackend(stateBackend);
-            graph.setChangelogStateBackendEnabled(changelogStateBackendEnabled);
-            graph.setCheckpointStorage(checkpointStorage);
-            graph.setSavepointDirectory(savepointDir);
-
-            if (checkpointConfig.isApproximateLocalRecoveryEnabled()) {
-                checkApproximateLocalRecoveryCompatibility();
-                graph.setGlobalDataExchangeMode(
-                        GlobalDataExchangeMode.ALL_EDGES_PIPELINED_APPROXIMATE);
-            } else {
-                graph.setGlobalDataExchangeMode(GlobalDataExchangeMode.ALL_EDGES_PIPELINED);
-            }
+            configureStreamGraphStreaming(graph);
         }
+    }
+
+    private void configureStreamGraphBatch(final StreamGraph graph) {
+        graph.setJobType(JobType.BATCH);
+        graph.setJobName(deriveJobName(DEFAULT_BATCH_JOB_NAME));
+
+        if (checkpointConfig.isCheckpointingEnabled()) {
+            LOG.info(
+                    "Disabled Checkpointing. Checkpointing is not supported and not needed when executing jobs in BATCH mode.");
+            checkpointConfig.disableCheckpointing();
+        }
+        setBatchStateBackendAndTimerService(graph);
+
+        graph.setGlobalStreamExchangeMode(deriveGlobalStreamExchangeModeBatch());
+        graph.setAllVerticesInSameSlotSharingGroupByDefault(false);
+    }
+
+    private void configureStreamGraphStreaming(final StreamGraph graph) {
+        graph.setJobType(JobType.STREAMING);
+        graph.setJobName(deriveJobName(DEFAULT_STREAMING_JOB_NAME));
+
+        graph.setStateBackend(stateBackend);
+        graph.setChangelogStateBackendEnabled(changelogStateBackendEnabled);
+        graph.setCheckpointStorage(checkpointStorage);
+        graph.setSavepointDirectory(savepointDir);
+        graph.setGlobalStreamExchangeMode(deriveGlobalStreamExchangeModeStreaming());
+    }
+
+    private String deriveJobName(String defaultJobName) {
+        return configuration.getOptional(PipelineOptions.NAME).orElse(defaultJobName);
+    }
+
+    private GlobalStreamExchangeMode deriveGlobalStreamExchangeModeBatch() {
+        final BatchShuffleMode shuffleMode = configuration.get(ExecutionOptions.BATCH_SHUFFLE_MODE);
+        switch (shuffleMode) {
+            case ALL_EXCHANGES_PIPELINED:
+                return GlobalStreamExchangeMode.ALL_EDGES_PIPELINED;
+            case ALL_EXCHANGES_BLOCKING:
+                return GlobalStreamExchangeMode.ALL_EDGES_BLOCKING;
+            default:
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Unsupported shuffle mode '%s' in BATCH runtime mode.",
+                                shuffleMode.toString()));
+        }
+    }
+
+    private GlobalStreamExchangeMode deriveGlobalStreamExchangeModeStreaming() {
+        if (checkpointConfig.isApproximateLocalRecoveryEnabled()) {
+            checkApproximateLocalRecoveryCompatibility();
+            return GlobalStreamExchangeMode.ALL_EDGES_PIPELINED_APPROXIMATE;
+        }
+        return GlobalStreamExchangeMode.ALL_EDGES_PIPELINED;
     }
 
     private void checkApproximateLocalRecoveryCompatibility() {
@@ -405,7 +438,28 @@ public class StreamGraphGenerator {
         }
     }
 
-    private boolean shouldExecuteInBatchMode(final RuntimeExecutionMode configuredMode) {
+    private void setFineGrainedGlobalStreamExchangeMode(StreamGraph graph) {
+        // There might be a resource deadlock when applying fine-grained resource management in
+        // batch jobs with PIPELINE edges. Users need to trigger the
+        // fine-grained.shuffle-mode.all-blocking to convert all edges to BLOCKING before we fix
+        // that issue.
+        if (shouldExecuteInBatchMode && graph.hasFineGrainedResource()) {
+            if (configuration.get(ClusterOptions.FINE_GRAINED_SHUFFLE_MODE_ALL_BLOCKING)) {
+                graph.setGlobalStreamExchangeMode(GlobalStreamExchangeMode.ALL_EDGES_BLOCKING);
+            } else {
+                throw new IllegalConfigurationException(
+                        "At the moment, fine-grained resource management requires batch workloads to "
+                                + "be executed with types of all edges being BLOCKING. To do that, you need to configure '"
+                                + ClusterOptions.FINE_GRAINED_SHUFFLE_MODE_ALL_BLOCKING.key()
+                                + "' to 'true'. Notice that this may affect the performance. See FLINK-20865 for more details.");
+            }
+        }
+    }
+
+    private boolean shouldExecuteInBatchMode() {
+        final RuntimeExecutionMode configuredMode =
+                configuration.get(ExecutionOptions.RUNTIME_MODE);
+
         final boolean existsUnboundedSource = existsUnboundedSource();
 
         checkState(
@@ -872,6 +926,11 @@ public class StreamGraphGenerator {
         @Override
         public ReadableConfig getGraphGeneratorConfig() {
             return config;
+        }
+
+        @Override
+        public Collection<Integer> transform(Transformation<?> transformation) {
+            return streamGraphGenerator.transform(transformation);
         }
     }
 }

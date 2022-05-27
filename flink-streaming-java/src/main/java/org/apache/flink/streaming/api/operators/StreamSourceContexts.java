@@ -17,13 +17,13 @@
 
 package org.apache.flink.streaming.api.operators;
 
+import org.apache.flink.api.common.operators.ProcessingTimeService.ProcessingTimeCallback;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
-import org.apache.flink.streaming.runtime.streamstatus.StreamStatus;
-import org.apache.flink.streaming.runtime.tasks.ProcessingTimeCallback;
 import org.apache.flink.streaming.runtime.tasks.ProcessingTimeService;
+import org.apache.flink.streaming.runtime.watermarkstatus.WatermarkStatus;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.flink.util.Preconditions;
 
@@ -48,17 +48,26 @@ public class StreamSourceContexts {
             Object checkpointLock,
             Output<StreamRecord<OUT>> output,
             long watermarkInterval,
-            long idleTimeout) {
+            long idleTimeout,
+            boolean emitProgressiveWatermarks) {
 
         final SourceFunction.SourceContext<OUT> ctx;
         switch (timeCharacteristic) {
             case EventTime:
                 ctx =
                         new ManualWatermarkContext<>(
-                                output, processingTimeService, checkpointLock, idleTimeout);
+                                output,
+                                processingTimeService,
+                                checkpointLock,
+                                idleTimeout,
+                                emitProgressiveWatermarks);
 
                 break;
             case IngestionTime:
+                Preconditions.checkState(
+                        emitProgressiveWatermarks,
+                        "Ingestion time is not available when emitting progressive watermarks "
+                                + "is disabled.");
                 ctx =
                         new AutomaticWatermarkContext<>(
                                 output,
@@ -66,7 +75,6 @@ public class StreamSourceContexts {
                                 processingTimeService,
                                 checkpointLock,
                                 idleTimeout);
-
                 break;
             case ProcessingTime:
                 ctx = new NonTimestampContext<>(checkpointLock, output);
@@ -74,7 +82,95 @@ public class StreamSourceContexts {
             default:
                 throw new IllegalArgumentException(String.valueOf(timeCharacteristic));
         }
-        return ctx;
+        return new SwitchingOnClose<>(ctx);
+    }
+
+    /**
+     * A thin wrapper that will substitute on close, a regular {@link SourceFunction.SourceContext}
+     * with a one that throws an exception on any interaction. We do that instead of adding a flag
+     * in {@link WatermarkContext} for performance reasons.
+     */
+    private static class SwitchingOnClose<T> implements SourceFunction.SourceContext<T> {
+
+        private SourceFunction.SourceContext<T> nestedContext;
+
+        private SwitchingOnClose(SourceFunction.SourceContext<T> nestedContext) {
+            this.nestedContext = nestedContext;
+        }
+
+        @Override
+        public void collect(T element) {
+            nestedContext.collect(element);
+        }
+
+        @Override
+        public void collectWithTimestamp(T element, long timestamp) {
+            nestedContext.collectWithTimestamp(element, timestamp);
+        }
+
+        @Override
+        public void emitWatermark(Watermark mark) {
+            nestedContext.emitWatermark(mark);
+        }
+
+        @Override
+        public void markAsTemporarilyIdle() {
+            nestedContext.markAsTemporarilyIdle();
+        }
+
+        @Override
+        public Object getCheckpointLock() {
+            return nestedContext.getCheckpointLock();
+        }
+
+        @Override
+        public void close() {
+            nestedContext.close();
+            this.nestedContext = new ClosedContext<>(nestedContext.getCheckpointLock());
+        }
+    }
+
+    private static class ClosedContext<T> implements SourceFunction.SourceContext<T> {
+
+        private final Object checkpointLock;
+
+        private ClosedContext(Object checkpointLock) {
+            this.checkpointLock = checkpointLock;
+        }
+
+        @Override
+        public void collect(T element) {
+            throwException();
+        }
+
+        @Override
+        public void collectWithTimestamp(T element, long timestamp) {
+            throwException();
+        }
+
+        @Override
+        public void emitWatermark(Watermark mark) {
+            throwException();
+        }
+
+        @Override
+        public void markAsTemporarilyIdle() {
+            throwException();
+        }
+
+        @Override
+        public Object getCheckpointLock() {
+            return checkpointLock;
+        }
+
+        @Override
+        public void close() {
+            // nothing to be done
+        }
+
+        private void throwException() {
+            throw new FlinkRuntimeException("The Source Context has been closed already.");
+        }
     }
 
     /**
@@ -173,7 +269,6 @@ public class StreamSourceContexts {
 
         @Override
         protected void processAndCollect(T element) {
-            checkNotClosed();
             lastRecordTime = this.timeService.getCurrentProcessingTime();
             output.collect(reuse.replace(element, lastRecordTime));
 
@@ -193,7 +288,6 @@ public class StreamSourceContexts {
 
         @Override
         protected void processAndCollectWithTimestamp(T element, long timestamp) {
-            checkNotClosed();
             processAndCollect(element);
         }
 
@@ -207,7 +301,6 @@ public class StreamSourceContexts {
         /** This will only be called if allowWatermark returned {@code true}. */
         @Override
         protected void processAndEmitWatermark(Watermark mark) {
-            checkNotClosed();
             nextWatermarkTime = Long.MAX_VALUE;
             output.emitWatermark(mark);
 
@@ -221,12 +314,11 @@ public class StreamSourceContexts {
         }
 
         @Override
-        protected void processAndEmitStreamStatus(StreamStatus streamStatus) {
-            checkNotClosed();
-            if (idle != streamStatus.isIdle()) {
-                output.emitStreamStatus(streamStatus);
+        protected void processAndEmitWatermarkStatus(WatermarkStatus watermarkStatus) {
+            if (idle != watermarkStatus.isIdle()) {
+                output.emitWatermarkStatus(watermarkStatus);
             }
-            idle = streamStatus.isIdle();
+            idle = watermarkStatus.isIdle();
         }
 
         @Override
@@ -302,6 +394,7 @@ public class StreamSourceContexts {
      */
     private static class ManualWatermarkContext<T> extends WatermarkContext<T> {
 
+        private final boolean emitProgressiveWatermarks;
         private final Output<StreamRecord<T>> output;
         private final StreamRecord<T> reuse;
         private boolean idle = false;
@@ -310,44 +403,42 @@ public class StreamSourceContexts {
                 final Output<StreamRecord<T>> output,
                 final ProcessingTimeService timeService,
                 final Object checkpointLock,
-                final long idleTimeout) {
+                final long idleTimeout,
+                final boolean emitProgressiveWatermarks) {
 
             super(timeService, checkpointLock, idleTimeout);
 
+            this.emitProgressiveWatermarks = emitProgressiveWatermarks;
             this.output = Preconditions.checkNotNull(output, "The output cannot be null.");
             this.reuse = new StreamRecord<>(null);
         }
 
         @Override
         protected void processAndCollect(T element) {
-            checkNotClosed();
             output.collect(reuse.replace(element));
         }
 
         @Override
         protected void processAndCollectWithTimestamp(T element, long timestamp) {
-            checkNotClosed();
             output.collect(reuse.replace(element, timestamp));
         }
 
         @Override
         protected void processAndEmitWatermark(Watermark mark) {
-            checkNotClosed();
             output.emitWatermark(mark);
         }
 
         @Override
-        protected void processAndEmitStreamStatus(StreamStatus streamStatus) {
-            checkNotClosed();
-            if (idle != streamStatus.isIdle()) {
-                output.emitStreamStatus(streamStatus);
+        protected void processAndEmitWatermarkStatus(WatermarkStatus watermarkStatus) {
+            if (idle != watermarkStatus.isIdle()) {
+                output.emitWatermarkStatus(watermarkStatus);
             }
-            idle = streamStatus.isIdle();
+            idle = watermarkStatus.isIdle();
         }
 
         @Override
         protected boolean allowWatermark(Watermark mark) {
-            return true;
+            return emitProgressiveWatermarks || mark.getTimestamp() == Long.MAX_VALUE;
         }
     }
 
@@ -356,9 +447,9 @@ public class StreamSourceContexts {
      * source contexts that are relevant with {@link Watermark}s.
      *
      * <p>Stream source contexts that are relevant with watermarks are responsible of manipulating
-     * the current {@link StreamStatus}, so that stream status can be correctly propagated
-     * downstream. Please refer to the class-level documentation of {@link StreamStatus} for
-     * information on how stream status affects watermark advancement at downstream tasks.
+     * the current {@link WatermarkStatus}, so that watermark status can be correctly propagated
+     * downstream. Please refer to the class-level documentation of {@link WatermarkStatus} for
+     * information on how watermark status affects watermark advancement at downstream tasks.
      *
      * <p>This class implements the logic of idleness detection. It fires idleness detection tasks
      * at a given interval; if no records or watermarks were collected by the source context between
@@ -372,7 +463,6 @@ public class StreamSourceContexts {
         protected final long idleTimeout;
 
         private ScheduledFuture<?> nextCheck;
-        private boolean closed = false;
 
         /**
          * This flag will be reset to {@code true} every time the next check is scheduled. Whenever
@@ -410,11 +500,9 @@ public class StreamSourceContexts {
         }
 
         @Override
-        public void collect(T element) {
-            checkNotClosed();
-
+        public final void collect(T element) {
             synchronized (checkpointLock) {
-                processAndEmitStreamStatus(StreamStatus.ACTIVE);
+                processAndEmitWatermarkStatus(WatermarkStatus.ACTIVE);
 
                 if (nextCheck != null) {
                     this.failOnNextCheck = false;
@@ -426,18 +514,10 @@ public class StreamSourceContexts {
             }
         }
 
-        protected void checkNotClosed() {
-            if (closed) {
-                throw new FlinkRuntimeException("The Source Context has been closed already.");
-            }
-        }
-
         @Override
-        public void collectWithTimestamp(T element, long timestamp) {
-            checkNotClosed();
-
+        public final void collectWithTimestamp(T element, long timestamp) {
             synchronized (checkpointLock) {
-                processAndEmitStreamStatus(StreamStatus.ACTIVE);
+                processAndEmitWatermarkStatus(WatermarkStatus.ACTIVE);
 
                 if (nextCheck != null) {
                     this.failOnNextCheck = false;
@@ -450,12 +530,10 @@ public class StreamSourceContexts {
         }
 
         @Override
-        public void emitWatermark(Watermark mark) {
-            checkNotClosed();
-
+        public final void emitWatermark(Watermark mark) {
             if (allowWatermark(mark)) {
                 synchronized (checkpointLock) {
-                    processAndEmitStreamStatus(StreamStatus.ACTIVE);
+                    processAndEmitWatermarkStatus(WatermarkStatus.ACTIVE);
 
                     if (nextCheck != null) {
                         this.failOnNextCheck = false;
@@ -469,11 +547,9 @@ public class StreamSourceContexts {
         }
 
         @Override
-        public void markAsTemporarilyIdle() {
-            checkNotClosed();
-
+        public final void markAsTemporarilyIdle() {
             synchronized (checkpointLock) {
-                processAndEmitStreamStatus(StreamStatus.IDLE);
+                processAndEmitWatermarkStatus(WatermarkStatus.IDLE);
             }
         }
 
@@ -484,7 +560,6 @@ public class StreamSourceContexts {
 
         @Override
         public void close() {
-            this.closed = true;
             cancelNextIdleDetectionTask();
         }
 
@@ -545,6 +620,6 @@ public class StreamSourceContexts {
          */
         protected abstract void processAndEmitWatermark(Watermark mark);
 
-        protected abstract void processAndEmitStreamStatus(StreamStatus streamStatus);
+        protected abstract void processAndEmitWatermarkStatus(WatermarkStatus watermarkStatus);
     }
 }

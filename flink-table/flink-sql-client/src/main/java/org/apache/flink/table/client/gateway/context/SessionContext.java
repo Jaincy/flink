@@ -33,7 +33,6 @@ import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogManager;
 import org.apache.flink.table.catalog.FunctionCatalog;
 import org.apache.flink.table.catalog.GenericInMemoryCatalog;
-import org.apache.flink.table.client.config.YamlConfigUtils;
 import org.apache.flink.table.client.gateway.Executor;
 import org.apache.flink.table.client.gateway.SqlExecutionException;
 import org.apache.flink.table.module.ModuleManager;
@@ -155,16 +154,6 @@ public class SessionContext {
         } else {
             ConfigOption<String> keyToDelete = ConfigOptions.key(key).stringType().noDefaultValue();
             sessionConfiguration.removeConfig(keyToDelete);
-            // need to remove compatible key
-            if (YamlConfigUtils.isDeprecatedKey(key)) {
-                String optionKey = YamlConfigUtils.getOptionNameWithDeprecatedKey(key);
-                sessionConfiguration.removeConfig(
-                        ConfigOptions.key(optionKey).stringType().noDefaultValue());
-            } else if (YamlConfigUtils.isOptionHasDeprecatedKey(key)) {
-                String deprecatedKey = YamlConfigUtils.getDeprecatedNameWithOptionKey(key);
-                sessionConfiguration.removeConfig(
-                        ConfigOptions.key(deprecatedKey).stringType().noDefaultValue());
-            }
             // It's safe to build ExecutionContext directly because origin configuration is legal.
             this.executionContext = new ExecutionContext(executionContext);
         }
@@ -174,7 +163,7 @@ public class SessionContext {
     public void set(String key, String value) {
         Configuration originConfiguration = sessionConfiguration.clone();
 
-        YamlConfigUtils.setKeyToConfiguration(sessionConfiguration, key, value);
+        sessionConfiguration.setString(key, value);
         try {
             // Renew the ExecutionContext.
             // Book keep all the session states of current ExecutionContext then
@@ -232,7 +221,8 @@ public class SessionContext {
 
         ModuleManager moduleManager = new ModuleManager();
 
-        final EnvironmentSettings settings = EnvironmentSettings.fromConfiguration(configuration);
+        final EnvironmentSettings settings =
+                EnvironmentSettings.newInstance().withConfiguration(configuration).build();
 
         CatalogManager catalogManager =
                 CatalogManager.newBuilder()
@@ -256,10 +246,6 @@ public class SessionContext {
 
         ExecutionContext executionContext =
                 new ExecutionContext(configuration, classLoader, sessionState);
-        LegacyTableEnvironmentInitializer.initializeSessionState(
-                executionContext.getTableEnvironment(),
-                defaultContext.getDefaultEnv(),
-                classLoader);
 
         return new SessionContext(
                 defaultContext,
@@ -276,7 +262,11 @@ public class SessionContext {
             return;
         }
 
+        // merge the jars in config with the jars maintained in session
+        Set<URL> jarsInConfig = getJarsInConfig();
+
         Set<URL> newDependencies = new HashSet<>(dependencies);
+        newDependencies.addAll(jarsInConfig);
         newDependencies.add(jarURL);
         updateClassLoaderAndDependencies(newDependencies);
 
@@ -295,7 +285,11 @@ public class SessionContext {
         }
 
         Set<URL> newDependencies = new HashSet<>(dependencies);
+        // merge the jars in config with the jars maintained in session
+        Set<URL> jarsInConfig = getJarsInConfig();
+        newDependencies.addAll(jarsInConfig);
         newDependencies.remove(jarURL);
+
         updateClassLoaderAndDependencies(newDependencies);
 
         // renew the execution context
@@ -339,25 +333,14 @@ public class SessionContext {
     }
 
     private void updateClassLoaderAndDependencies(Collection<URL> newDependencies) {
-        // merge the jar in config with the jar maintained in session
-        Set<URL> jarsInConfig;
-        try {
-            jarsInConfig =
-                    new HashSet<>(
-                            ConfigUtils.decodeListFromConfig(
-                                    sessionConfiguration, PipelineOptions.JARS, URL::new));
-        } catch (MalformedURLException e) {
-            throw new SqlExecutionException(
-                    "Failed to parse the option `pipeline.jars` in configuration.", e);
-        }
-        jarsInConfig.addAll(newDependencies);
+        // replace jars with the new dependencies
         ConfigUtils.encodeCollectionToConfig(
                 sessionConfiguration,
                 PipelineOptions.JARS,
-                new ArrayList<>(jarsInConfig),
+                new ArrayList<>(newDependencies),
                 URL::toString);
 
-        // TODO: update the the classloader in CatalogManager.
+        // TODO: update the classloader in CatalogManager.
         classLoader =
                 ClientUtils.buildUserCodeClassLoader(
                         new ArrayList<>(newDependencies),
@@ -388,5 +371,19 @@ public class SessionContext {
                     String.format("Failed to get the jar file with specified path: %s", jarPath),
                     e);
         }
+    }
+
+    private Set<URL> getJarsInConfig() {
+        Set<URL> jarsInConfig;
+        try {
+            jarsInConfig =
+                    new HashSet<>(
+                            ConfigUtils.decodeListFromConfig(
+                                    sessionConfiguration, PipelineOptions.JARS, URL::new));
+        } catch (MalformedURLException e) {
+            throw new SqlExecutionException(
+                    "Failed to parse the option `pipeline.jars` in configuration.", e);
+        }
+        return jarsInConfig;
     }
 }

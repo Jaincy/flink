@@ -20,7 +20,7 @@ package org.apache.flink.runtime.util;
 
 import org.apache.flink.util.TestLogger;
 
-import org.apache.flink.shaded.guava18.com.google.common.util.concurrent.ThreadFactoryBuilder;
+import org.apache.flink.shaded.guava30.com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 import org.junit.Assert;
 import org.junit.Test;
@@ -50,13 +50,17 @@ public class RunnablesTest extends TestLogger {
                         .setUncaughtExceptionHandler((t, e) -> handlerCalled.countDown())
                         .build();
         final ExecutorService executorService = Executors.newSingleThreadExecutor(threadFactory);
-        executorService.execute(
-                () -> {
-                    throw new RuntimeException("foo");
-                });
+        try {
+            executorService.execute(
+                    () -> {
+                        throw new RuntimeException("foo");
+                    });
 
-        // expect handler to be called
-        handlerCalled.await();
+            // expect handler to be called
+            handlerCalled.await();
+        } finally {
+            executorService.shutdown();
+        }
     }
 
     @Test

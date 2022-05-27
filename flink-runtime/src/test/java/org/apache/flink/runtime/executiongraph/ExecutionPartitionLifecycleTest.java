@@ -48,6 +48,8 @@ import org.apache.flink.runtime.shuffle.ShuffleTestUtils;
 import org.apache.flink.runtime.taskmanager.LocalTaskManagerLocation;
 import org.apache.flink.runtime.taskmanager.TaskManagerLocation;
 import org.apache.flink.runtime.testtasks.NoOpInvokable;
+import org.apache.flink.testutils.TestingUtils;
+import org.apache.flink.testutils.executor.TestExecutorResource;
 import org.apache.flink.util.TestLogger;
 
 import org.junit.ClassRule;
@@ -61,6 +63,7 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 
 import static org.hamcrest.Matchers.contains;
@@ -74,8 +77,8 @@ import static org.junit.Assert.assertTrue;
 public class ExecutionPartitionLifecycleTest extends TestLogger {
 
     @ClassRule
-    public static final TestingComponentMainThreadExecutor.Resource EXECUTOR_RESOURCE =
-            new TestingComponentMainThreadExecutor.Resource();
+    public static final TestExecutorResource<ScheduledExecutorService> EXECUTOR_RESOURCE =
+            TestingUtils.defaultExecutorResource();
 
     private Execution execution;
     private ResultPartitionDeploymentDescriptor descriptor;
@@ -276,8 +279,10 @@ public class ExecutionPartitionLifecycleTest extends TestLogger {
 
         final JobGraph jobGraph = JobGraphTestUtils.batchJobGraph(producerVertex, consumerVertex);
         final SchedulerBase scheduler =
-                SchedulerTestingUtils.newSchedulerBuilder(
-                                jobGraph, ComponentMainThreadExecutorServiceAdapter.forMainThread())
+                new SchedulerTestingUtils.DefaultSchedulerBuilder(
+                                jobGraph,
+                                ComponentMainThreadExecutorServiceAdapter.forMainThread(),
+                                EXECUTOR_RESOURCE.getExecutor())
                         .setExecutionSlotAllocatorFactory(
                                 SchedulerTestingUtils.newSlotSharingExecutionSlotAllocatorFactory(
                                         physicalSlotProvider))
@@ -322,26 +327,47 @@ public class ExecutionPartitionLifecycleTest extends TestLogger {
 
         @Override
         public CompletableFuture<ShuffleDescriptor> registerPartitionWithProducer(
-                PartitionDescriptor partitionDescriptor, ProducerDescriptor producerDescriptor) {
+                JobID jobID,
+                PartitionDescriptor partitionDescriptor,
+                ProducerDescriptor producerDescriptor) {
             return CompletableFuture.completedFuture(
-                    new ShuffleDescriptor() {
-                        @Override
-                        public ResultPartitionID getResultPartitionID() {
-                            return new ResultPartitionID(
-                                    partitionDescriptor.getPartitionId(),
-                                    producerDescriptor.getProducerExecutionId());
-                        }
-
-                        @Override
-                        public Optional<ResourceID> storesLocalResourcesOn() {
-                            return Optional.of(producerDescriptor.getProducerLocation());
-                        }
-                    });
+                    new TestingShuffleDescriptor(
+                            partitionDescriptor.getPartitionId(),
+                            producerDescriptor.getProducerExecutionId(),
+                            producerDescriptor.getProducerLocation()));
         }
 
         @Override
         public void releasePartitionExternally(ShuffleDescriptor shuffleDescriptor) {
             externallyReleasedPartitions.add(shuffleDescriptor);
+        }
+    }
+
+    private static class TestingShuffleDescriptor implements ShuffleDescriptor {
+
+        private static final long serialVersionUID = 1819950291216655728L;
+
+        private final ExecutionAttemptID producerExecutionId;
+        private final IntermediateResultPartitionID producedPartitionId;
+        private final ResourceID producerLocation;
+
+        TestingShuffleDescriptor(
+                IntermediateResultPartitionID producedPartitionId,
+                ExecutionAttemptID producerExecutionId,
+                ResourceID producerLocation) {
+            this.producedPartitionId = producedPartitionId;
+            this.producerExecutionId = producerExecutionId;
+            this.producerLocation = producerLocation;
+        }
+
+        @Override
+        public ResultPartitionID getResultPartitionID() {
+            return new ResultPartitionID(producedPartitionId, producerExecutionId);
+        }
+
+        @Override
+        public Optional<ResourceID> storesLocalResourcesOn() {
+            return Optional.of(producerLocation);
         }
     }
 }

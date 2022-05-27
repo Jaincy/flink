@@ -25,6 +25,7 @@ import org.apache.flink.runtime.client.JobExecutionException;
 import org.apache.flink.runtime.executiongraph.ExecutionGraph;
 import org.apache.flink.runtime.executiongraph.ExecutionGraphTestUtils;
 import org.apache.flink.runtime.executiongraph.ExecutionJobVertex;
+import org.apache.flink.runtime.executiongraph.ExecutionVertex;
 import org.apache.flink.runtime.executiongraph.TestingDefaultExecutionGraphBuilder;
 import org.apache.flink.runtime.io.network.api.writer.SubtaskStateMapper;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionType;
@@ -42,9 +43,12 @@ import org.apache.flink.runtime.state.OperatorStateHandle;
 import org.apache.flink.runtime.state.OperatorStreamStateHandle;
 import org.apache.flink.runtime.state.memory.ByteStreamStateHandle;
 import org.apache.flink.runtime.testtasks.NoOpInvokable;
+import org.apache.flink.testutils.TestingUtils;
+import org.apache.flink.testutils.executor.TestExecutorResource;
 import org.apache.flink.util.TestLogger;
 
 import org.junit.Assert;
+import org.junit.ClassRule;
 import org.junit.Test;
 
 import java.util.Arrays;
@@ -56,6 +60,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -85,6 +90,9 @@ import static org.junit.Assert.assertEquals;
 
 /** Tests to verify state assignment operation. */
 public class StateAssignmentOperationTest extends TestLogger {
+    @ClassRule
+    public static final TestExecutorResource<ScheduledExecutorService> EXECUTOR_RESOURCE =
+            TestingUtils.defaultExecutorResource();
 
     private static final int MAX_P = 256;
 
@@ -186,6 +194,57 @@ public class StateAssignmentOperationTest extends TestLogger {
                         metaInfoMap2, new ByteStreamStateHandle("test2", new byte[60]));
         operatorState.putState(
                 1, OperatorSubtaskState.builder().setManagedOperatorState(osh2).build());
+
+        verifyOneKindPartitionableStateRescale(operatorState, operatorID);
+    }
+
+    @Test
+    public void testRepartitionBroadcastStateWithNullSubtaskState() {
+        OperatorID operatorID = new OperatorID();
+        OperatorState operatorState = new OperatorState(operatorID, 2, 4);
+
+        // Only the subtask 0 reports the states.
+        Map<String, OperatorStateHandle.StateMetaInfo> metaInfoMap1 = new HashMap<>(2);
+        metaInfoMap1.put(
+                "t-5",
+                new OperatorStateHandle.StateMetaInfo(
+                        new long[] {0, 10, 20}, OperatorStateHandle.Mode.BROADCAST));
+        metaInfoMap1.put(
+                "t-6",
+                new OperatorStateHandle.StateMetaInfo(
+                        new long[] {30, 40, 50}, OperatorStateHandle.Mode.BROADCAST));
+        OperatorStateHandle osh1 =
+                new OperatorStreamStateHandle(
+                        metaInfoMap1, new ByteStreamStateHandle("test1", new byte[60]));
+        operatorState.putState(
+                0, OperatorSubtaskState.builder().setManagedOperatorState(osh1).build());
+
+        verifyOneKindPartitionableStateRescale(operatorState, operatorID);
+    }
+
+    @Test
+    public void testRepartitionBroadcastStateWithEmptySubtaskState() {
+        OperatorID operatorID = new OperatorID();
+        OperatorState operatorState = new OperatorState(operatorID, 2, 4);
+
+        // Only the subtask 0 reports the states.
+        Map<String, OperatorStateHandle.StateMetaInfo> metaInfoMap1 = new HashMap<>(2);
+        metaInfoMap1.put(
+                "t-5",
+                new OperatorStateHandle.StateMetaInfo(
+                        new long[] {0, 10, 20}, OperatorStateHandle.Mode.BROADCAST));
+        metaInfoMap1.put(
+                "t-6",
+                new OperatorStateHandle.StateMetaInfo(
+                        new long[] {30, 40, 50}, OperatorStateHandle.Mode.BROADCAST));
+        OperatorStateHandle osh1 =
+                new OperatorStreamStateHandle(
+                        metaInfoMap1, new ByteStreamStateHandle("test1", new byte[60]));
+        operatorState.putState(
+                0, OperatorSubtaskState.builder().setManagedOperatorState(osh1).build());
+
+        // The subtask 1 report an empty snapshot.
+        operatorState.putState(1, OperatorSubtaskState.builder().build());
 
         verifyOneKindPartitionableStateRescale(operatorState, operatorID);
     }
@@ -685,6 +744,36 @@ public class StateAssignmentOperationTest extends TestLogger {
                         .getInputRescalingDescriptor());
     }
 
+    @Test
+    public void testStateWithFullyFinishedOperators() throws JobException, JobExecutionException {
+        List<OperatorID> operatorIds = buildOperatorIds(2);
+        Map<OperatorID, OperatorState> states =
+                buildOperatorStates(Collections.singletonList(operatorIds.get(1)), 3);
+
+        // Create an operator state marked as finished
+        OperatorState operatorState = new FullyFinishedOperatorState(operatorIds.get(0), 3, 256);
+        states.put(operatorIds.get(0), operatorState);
+
+        Map<OperatorID, ExecutionJobVertex> vertices =
+                buildVertices(operatorIds, 2, RANGE, ROUND_ROBIN);
+        new StateAssignmentOperation(0, new HashSet<>(vertices.values()), states, false)
+                .assignStates();
+
+        // Check the job vertex with only finished operator.
+        ExecutionJobVertex jobVertexWithFinishedOperator = vertices.get(operatorIds.get(0));
+        for (ExecutionVertex task : jobVertexWithFinishedOperator.getTaskVertices()) {
+            JobManagerTaskRestore taskRestore = task.getCurrentExecutionAttempt().getTaskRestore();
+            Assert.assertTrue(taskRestore.getTaskStateSnapshot().isTaskDeployedAsFinished());
+        }
+
+        // Check the job vertex without finished operator.
+        ExecutionJobVertex jobVertexWithoutFinishedOperator = vertices.get(operatorIds.get(1));
+        for (ExecutionVertex task : jobVertexWithoutFinishedOperator.getTaskVertices()) {
+            JobManagerTaskRestore taskRestore = task.getCurrentExecutionAttempt().getTaskRestore();
+            Assert.assertFalse(taskRestore.getTaskStateSnapshot().isTaskDeployedAsFinished());
+        }
+    }
+
     private void assertState(
             Map<OperatorID, ExecutionJobVertex> vertices,
             OperatorID operatorId,
@@ -844,7 +933,9 @@ public class StateAssignmentOperationTest extends TestLogger {
             throws JobException, JobExecutionException {
         JobGraph jobGraph = JobGraphTestUtils.streamingJobGraph(jobVertices);
         ExecutionGraph eg =
-                TestingDefaultExecutionGraphBuilder.newBuilder().setJobGraph(jobGraph).build();
+                TestingDefaultExecutionGraphBuilder.newBuilder()
+                        .setJobGraph(jobGraph)
+                        .build(EXECUTOR_RESOURCE.getExecutor());
         return Arrays.stream(jobVertices)
                 .collect(
                         Collectors.toMap(

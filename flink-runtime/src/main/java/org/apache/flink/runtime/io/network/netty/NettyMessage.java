@@ -236,6 +236,9 @@ public abstract class NettyMessage {
                     case AckAllUserRecordsProcessed.ID:
                         decodedMsg = AckAllUserRecordsProcessed.readFrom(msg);
                         break;
+                    case NewBufferSize.ID:
+                        decodedMsg = NewBufferSize.readFrom(msg);
+                        break;
                     default:
                         throw new ProtocolException(
                                 "Received unknown message from producer: " + msg);
@@ -304,6 +307,7 @@ public abstract class NettyMessage {
             checkArgument(
                     buffer.getDataType().ordinal() <= Byte.MAX_VALUE,
                     "Too many data types defined!");
+            checkArgument(backlog >= 0, "Must be non-negative.");
             this.dataType = buffer.getDataType();
             this.isCompressed = buffer.isCompressed();
             this.sequenceNumber = sequenceNumber;
@@ -402,14 +406,18 @@ public abstract class NettyMessage {
             boolean isCompressed = messageHeader.readBoolean();
             int size = messageHeader.readInt();
 
-            Buffer dataBuffer = null;
+            Buffer dataBuffer;
+            if (dataType.isBuffer()) {
+                dataBuffer = bufferAllocator.allocatePooledNetworkBuffer(receiverId);
+            } else {
+                dataBuffer = bufferAllocator.allocateUnPooledNetworkBuffer(size, dataType);
+            }
 
-            if (size != 0) {
-                if (dataType.isBuffer()) {
-                    dataBuffer = bufferAllocator.allocatePooledNetworkBuffer(receiverId);
-                } else {
-                    dataBuffer = bufferAllocator.allocateUnPooledNetworkBuffer(size, dataType);
-                }
+            if (size == 0 && dataBuffer != null) {
+                // recycle the empty buffer directly, we must allocate a buffer for
+                // the empty data to release the credit already allocated for it
+                dataBuffer.recycleBuffer();
+                dataBuffer = null;
             }
 
             if (dataBuffer != null) {
@@ -785,6 +793,100 @@ public abstract class NettyMessage {
         @Override
         public String toString() {
             return String.format("AckAllUserRecordsProcessed(%s)", receiverId);
+        }
+    }
+
+    /** Backlog announcement from the producer to the consumer for credit allocation. */
+    static class BacklogAnnouncement extends NettyMessage {
+
+        static final byte ID = 9;
+
+        final int backlog;
+
+        final InputChannelID receiverId;
+
+        BacklogAnnouncement(int backlog, InputChannelID receiverId) {
+            checkArgument(backlog > 0, "Must be positive.");
+            checkArgument(receiverId != null, "Must be not null.");
+
+            this.backlog = backlog;
+            this.receiverId = receiverId;
+        }
+
+        @Override
+        void write(ChannelOutboundInvoker out, ChannelPromise promise, ByteBufAllocator allocator)
+                throws IOException {
+            ByteBuf result = null;
+
+            try {
+                result =
+                        allocateBuffer(
+                                allocator, ID, Integer.BYTES + InputChannelID.getByteBufLength());
+                result.writeInt(backlog);
+                receiverId.writeTo(result);
+
+                out.write(result, promise);
+            } catch (Throwable t) {
+                handleException(result, null, t);
+            }
+        }
+
+        static BacklogAnnouncement readFrom(ByteBuf buffer) {
+            int backlog = buffer.readInt();
+            InputChannelID receiverId = InputChannelID.fromByteBuf(buffer);
+
+            return new BacklogAnnouncement(backlog, receiverId);
+        }
+
+        @Override
+        public String toString() {
+            return String.format("BacklogAnnouncement(%d : %s)", backlog, receiverId);
+        }
+    }
+
+    /** Message to notify producer about new buffer size. */
+    static class NewBufferSize extends NettyMessage {
+
+        private static final byte ID = 10;
+
+        final int bufferSize;
+
+        final InputChannelID receiverId;
+
+        NewBufferSize(int bufferSize, InputChannelID receiverId) {
+            checkArgument(bufferSize > 0, "The new buffer size should be greater than 0");
+            this.bufferSize = bufferSize;
+            this.receiverId = receiverId;
+        }
+
+        @Override
+        void write(ChannelOutboundInvoker out, ChannelPromise promise, ByteBufAllocator allocator)
+                throws IOException {
+            ByteBuf result = null;
+
+            try {
+                result =
+                        allocateBuffer(
+                                allocator, ID, Integer.BYTES + InputChannelID.getByteBufLength());
+                result.writeInt(bufferSize);
+                receiverId.writeTo(result);
+
+                out.write(result, promise);
+            } catch (Throwable t) {
+                handleException(result, null, t);
+            }
+        }
+
+        static NewBufferSize readFrom(ByteBuf buffer) {
+            int bufferSize = buffer.readInt();
+            InputChannelID receiverId = InputChannelID.fromByteBuf(buffer);
+
+            return new NewBufferSize(bufferSize, receiverId);
+        }
+
+        @Override
+        public String toString() {
+            return String.format("NewBufferSize(%s : %d)", receiverId, bufferSize);
         }
     }
 

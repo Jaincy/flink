@@ -18,6 +18,7 @@
 package org.apache.flink.connectors.hive.read;
 
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.connectors.hive.HiveOptions;
 import org.apache.flink.connectors.hive.JobConfWrapper;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.TableSchema;
@@ -43,8 +44,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static org.apache.flink.table.filesystem.FileSystemOptions.STREAMING_SOURCE_PARTITION_ORDER;
-import static org.junit.Assert.assertEquals;
+import static org.apache.flink.connectors.hive.HiveOptions.STREAMING_SOURCE_PARTITION_ORDER;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for hive partition fetch implementations. */
 public class HivePartitionFetcherTest {
@@ -76,7 +77,7 @@ public class HivePartitionFetcherTest {
 
         // test partition-time order
         Configuration flinkConf = new Configuration();
-        flinkConf.set(STREAMING_SOURCE_PARTITION_ORDER, "partition-time");
+        flinkConf.set(STREAMING_SOURCE_PARTITION_ORDER, HiveOptions.PartitionOrder.PARTITION_TIME);
         HiveShim hiveShim = HiveShimLoader.loadHiveShim(hiveCatalog.getHiveVersion());
         JobConfWrapper jobConfWrapper = new JobConfWrapper(new JobConf(hiveCatalog.getHiveConf()));
         String defaultPartName = "__HIVE_DEFAULT_PARTITION__";
@@ -91,10 +92,10 @@ public class HivePartitionFetcherTest {
                         flinkConf,
                         defaultPartName);
         fetcherContext.open();
-        assertEquals(0, fetcherContext.getComparablePartitionValueList().size());
+        assertThat(fetcherContext.getComparablePartitionValueList()).isEmpty();
 
         // test create-time order
-        flinkConf.set(STREAMING_SOURCE_PARTITION_ORDER, "create-time");
+        flinkConf.set(STREAMING_SOURCE_PARTITION_ORDER, HiveOptions.PartitionOrder.CREATE_TIME);
         fetcherContext =
                 new MyHivePartitionFetcherContext(
                         tablePath,
@@ -106,10 +107,10 @@ public class HivePartitionFetcherTest {
                         flinkConf,
                         defaultPartName);
         fetcherContext.open();
-        assertEquals(0, fetcherContext.getComparablePartitionValueList().size());
+        assertThat(fetcherContext.getComparablePartitionValueList()).isEmpty();
 
         // test partition-name order
-        flinkConf.set(STREAMING_SOURCE_PARTITION_ORDER, "partition-name");
+        flinkConf.set(STREAMING_SOURCE_PARTITION_ORDER, HiveOptions.PartitionOrder.PARTITION_NAME);
         fetcherContext =
                 new MyHivePartitionFetcherContext(
                         tablePath,
@@ -121,7 +122,7 @@ public class HivePartitionFetcherTest {
                         flinkConf,
                         defaultPartName);
         fetcherContext.open();
-        assertEquals(0, fetcherContext.getComparablePartitionValueList().size());
+        assertThat(fetcherContext.getComparablePartitionValueList()).isEmpty();
     }
 
     private static class MyHivePartitionFetcherContext

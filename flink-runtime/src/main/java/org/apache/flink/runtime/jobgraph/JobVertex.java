@@ -24,7 +24,7 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.io.InputSplitSource;
 import org.apache.flink.runtime.OperatorIDPair;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionType;
-import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
+import org.apache.flink.runtime.jobgraph.tasks.TaskInvokable;
 import org.apache.flink.runtime.jobmanager.scheduler.CoLocationGroup;
 import org.apache.flink.runtime.jobmanager.scheduler.CoLocationGroupImpl;
 import org.apache.flink.runtime.jobmanager.scheduler.SlotSharingGroup;
@@ -68,7 +68,7 @@ public class JobVertex implements java.io.Serializable {
      *    C    E
      * </pre>
      *
-     * This is the same order that operators are stored in the {@code StreamTask}.
+     * <p>This is the same order that operators are stored in the {@code StreamTask}.
      */
     private final List<OperatorIDPair> operatorIDs;
 
@@ -244,7 +244,7 @@ public class JobVertex implements java.io.Serializable {
         return this.configuration;
     }
 
-    public void setInvokableClass(Class<? extends AbstractInvokable> invokable) {
+    public void setInvokableClass(Class<? extends TaskInvokable> invokable) {
         Preconditions.checkNotNull(invokable);
         this.invokableClassName = invokable.getName();
     }
@@ -264,7 +264,7 @@ public class JobVertex implements java.io.Serializable {
      * @param cl The classloader used to resolve user-defined classes
      * @return The invokable class, <code>null</code> if it is not set
      */
-    public Class<? extends AbstractInvokable> getInvokableClass(ClassLoader cl) {
+    public Class<? extends TaskInvokable> getInvokableClass(ClassLoader cl) {
         if (cl == null) {
             throw new NullPointerException("The classloader must not be null.");
         }
@@ -273,13 +273,12 @@ public class JobVertex implements java.io.Serializable {
         }
 
         try {
-            return Class.forName(invokableClassName, true, cl).asSubclass(AbstractInvokable.class);
+            return Class.forName(invokableClassName, true, cl).asSubclass(TaskInvokable.class);
         } catch (ClassNotFoundException e) {
             throw new RuntimeException("The user-code class could not be resolved.", e);
         } catch (ClassCastException e) {
             throw new RuntimeException(
-                    "The user-code class is no subclass of " + AbstractInvokable.class.getName(),
-                    e);
+                    "The user-code class is no subclass of " + TaskInvokable.class.getName(), e);
         }
     }
 
@@ -468,8 +467,7 @@ public class JobVertex implements java.io.Serializable {
     }
 
     // --------------------------------------------------------------------------------------------
-
-    public IntermediateDataSet createAndAddResultDataSet(ResultPartitionType partitionType) {
+    private IntermediateDataSet createAndAddResultDataSet(ResultPartitionType partitionType) {
         return createAndAddResultDataSet(new IntermediateDataSetID(), partitionType);
     }
 
@@ -481,14 +479,6 @@ public class JobVertex implements java.io.Serializable {
         return result;
     }
 
-    public JobEdge connectDataSetAsInput(
-            IntermediateDataSet dataSet, DistributionPattern distPattern) {
-        JobEdge edge = new JobEdge(dataSet, this, distPattern);
-        this.inputs.add(edge);
-        dataSet.addConsumer(edge);
-        return edge;
-    }
-
     public JobEdge connectNewDataSetAsInput(
             JobVertex input, DistributionPattern distPattern, ResultPartitionType partitionType) {
 
@@ -498,11 +488,6 @@ public class JobVertex implements java.io.Serializable {
         this.inputs.add(edge);
         dataSet.addConsumer(edge);
         return edge;
-    }
-
-    public void connectIdInput(IntermediateDataSetID dataSetId, DistributionPattern distPattern) {
-        JobEdge edge = new JobEdge(dataSetId, this, distPattern);
-        this.inputs.add(edge);
     }
 
     // --------------------------------------------------------------------------------------------

@@ -15,33 +15,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.flink.table.planner.plan.stream.sql
 
+import org.apache.flink.core.testutils.FlinkMatchers.containsCause
 import org.apache.flink.table.api.ValidationException
 import org.apache.flink.table.planner.utils.TableTestBase
+
 import org.junit.Test
 
-/**
- * Tests for window table-valued function.
- */
+/** Tests for window table-valued function. */
 class WindowTableFunctionTest extends TableTestBase {
 
   private val util = streamTestUtil()
-  util.tableEnv.executeSql(
-    s"""
-       |CREATE TABLE MyTable (
-       |  a INT,
-       |  b BIGINT,
-       |  c STRING,
-       |  d DECIMAL(10, 3),
-       |  rowtime TIMESTAMP(3),
-       |  proctime as PROCTIME(),
-       |  WATERMARK FOR rowtime AS rowtime - INTERVAL '1' SECOND
-       |) with (
-       |  'connector' = 'values'
-       |)
-       |""".stripMargin)
+  util.tableEnv.executeSql(s"""
+                              |CREATE TABLE MyTable (
+                              |  a INT,
+                              |  b BIGINT,
+                              |  c STRING,
+                              |  d DECIMAL(10, 3),
+                              |  rowtime TIMESTAMP(3),
+                              |  proctime as PROCTIME(),
+                              |  WATERMARK FOR rowtime AS rowtime - INTERVAL '1' SECOND
+                              |) with (
+                              |  'connector' = 'values'
+                              |)
+                              |""".stripMargin)
 
   @Test
   def testTumbleTVF(): Unit = {
@@ -75,7 +73,29 @@ class WindowTableFunctionTest extends TableTestBase {
   }
 
   @Test
+  def testHopTVFProctime(): Unit = {
+    val sql =
+      """
+        |SELECT *
+        |FROM TABLE(
+        | HOP(TABLE MyTable, DESCRIPTOR(proctime), INTERVAL '5' MINUTE, INTERVAL '10' MINUTE))
+        |""".stripMargin
+    util.verifyRelPlan(sql)
+  }
+
+  @Test
   def testCumulateTVF(): Unit = {
+    val sql =
+      """
+        |SELECT *
+        |FROM TABLE(
+        | CUMULATE(TABLE MyTable, DESCRIPTOR(rowtime), INTERVAL '10' MINUTE, INTERVAL '1' HOUR))
+        |""".stripMargin
+    util.verifyRelPlan(sql)
+  }
+
+  @Test
+  def testCumulateTVFProctime(): Unit = {
     val sql =
       """
         |SELECT *
@@ -87,31 +107,32 @@ class WindowTableFunctionTest extends TableTestBase {
 
   @Test
   def testWindowOnNonTimeAttribute(): Unit = {
-    util.tableEnv.executeSql(
-      """
-        |CREATE VIEW v1 AS
-        |SELECT *, LOCALTIMESTAMP AS cur_time
-        |FROM MyTable
-        |""".stripMargin)
+    util.tableEnv.executeSql("""
+                               |CREATE VIEW v1 AS
+                               |SELECT *, LOCALTIMESTAMP AS cur_time
+                               |FROM MyTable
+                               |""".stripMargin)
     val sql =
       """
         |SELECT *
         |FROM TABLE(
         | TUMBLE(TABLE v1, DESCRIPTOR(cur_time), INTERVAL '15' MINUTE))
         |""".stripMargin
-    thrown.expectMessage("requires the timecol is a time attribute type, but is TIMESTAMP(3)")
-    thrown.expect(classOf[ValidationException])
+    thrown.expectCause(
+      containsCause(
+        new ValidationException(
+          "The window function requires the timecol is a time attribute type, but is TIMESTAMP(3).")
+      ))
     util.verifyRelPlan(sql)
   }
 
   @Test
   def testConflictingFieldNames(): Unit = {
-    util.tableEnv.executeSql(
-      """
-        |CREATE VIEW v1 AS
-        |SELECT *, rowtime AS window_start
-        |FROM MyTable
-        |""".stripMargin)
+    util.tableEnv.executeSql("""
+                               |CREATE VIEW v1 AS
+                               |SELECT *, rowtime AS window_start
+                               |FROM MyTable
+                               |""".stripMargin)
     val sql =
       """
         |SELECT *
@@ -125,38 +146,29 @@ class WindowTableFunctionTest extends TableTestBase {
   }
 
   @Test
-  def testUnsupported(): Unit = {
-    val sql =
-      """
-        |SELECT *
-        |FROM TABLE(TUMBLE(TABLE MyTable, DESCRIPTOR(rowtime), INTERVAL '15' MINUTE))
-        |""".stripMargin
-
-    thrown.expectMessage("Currently Flink doesn't support individual window " +
-      "table-valued function TUMBLE(time_col=[rowtime], size=[15 min]).\n " +
-      "Please use window table-valued function with aggregate together " +
-      "using window_start and window_end as group keys.")
-    thrown.expect(classOf[UnsupportedOperationException])
-    util.verifyExplain(sql)
-  }
-
-  @Test
-  def testInvalidTumbleParameters(): Unit = {
+  def testTumbleTVFWithOffset(): Unit = {
     val sql =
       """
         |SELECT *
         |FROM TABLE(TUMBLE(
         |   TABLE MyTable, DESCRIPTOR(rowtime), INTERVAL '15' MINUTE, INTERVAL '5' MINUTE))
         |""".stripMargin
-
-    thrown.expectMessage("Supported form(s): " +
-      "TUMBLE(TABLE table_name, DESCRIPTOR(timecol), datetime interval)")
-    thrown.expect(classOf[ValidationException])
-    util.verifyExplain(sql)
+    util.verifyRelPlan(sql)
   }
 
   @Test
-  def testInvalidHopParameters(): Unit = {
+  def testTumbleTVFWithNegativeOffset(): Unit = {
+    val sql =
+      """
+        |SELECT *
+        |FROM TABLE(TUMBLE(
+        |   TABLE MyTable, DESCRIPTOR(rowtime), INTERVAL '15' MINUTE, INTERVAL '-5' MINUTE))
+        |""".stripMargin
+    util.verifyRelPlan(sql)
+  }
+
+  @Test
+  def testHopTVFWithOffset(): Unit = {
     val sql =
       """
         |SELECT *
@@ -168,15 +180,27 @@ class WindowTableFunctionTest extends TableTestBase {
         |    INTERVAL '15' MINUTE,
         |    INTERVAL '5' MINUTE))
         |""".stripMargin
-
-    thrown.expectMessage("Supported form(s): " +
-      "HOP(TABLE table_name, DESCRIPTOR(timecol), datetime interval, datetime interval)")
-    thrown.expect(classOf[ValidationException])
-    util.verifyExplain(sql)
+    util.verifyRelPlan(sql)
   }
 
   @Test
-  def testInvalidCumulateParameters(): Unit = {
+  def testHopTVFWithNegativeOffset(): Unit = {
+    val sql =
+      """
+        |SELECT *
+        |FROM TABLE(
+        |  HOP(
+        |    TABLE MyTable,
+        |    DESCRIPTOR(rowtime),
+        |    INTERVAL '1' MINUTE,
+        |    INTERVAL '15' MINUTE,
+        |    INTERVAL '-5' MINUTE))
+        |""".stripMargin
+    util.verifyRelPlan(sql)
+  }
+
+  @Test
+  def testCumulateTVFWithOffset(): Unit = {
     val sql =
       """
         |SELECT *
@@ -188,11 +212,22 @@ class WindowTableFunctionTest extends TableTestBase {
         |    INTERVAL '15' MINUTE,
         |    INTERVAL '5' MINUTE))
         |""".stripMargin
-
-    thrown.expectMessage("Supported form(s): " +
-      "CUMULATE(TABLE table_name, DESCRIPTOR(timecol), datetime interval, datetime interval)")
-    thrown.expect(classOf[ValidationException])
-    util.verifyExplain(sql)
+    util.verifyRelPlan(sql)
   }
 
+  @Test
+  def testCumulateTVFWithNegativeOffset(): Unit = {
+    val sql =
+      """
+        |SELECT *
+        |FROM TABLE(
+        |  CUMULATE(
+        |    TABLE MyTable,
+        |    DESCRIPTOR(rowtime),
+        |    INTERVAL '1' MINUTE,
+        |    INTERVAL '15' MINUTE,
+        |    INTERVAL '-5' MINUTE))
+        |""".stripMargin
+    util.verifyRelPlan(sql)
+  }
 }

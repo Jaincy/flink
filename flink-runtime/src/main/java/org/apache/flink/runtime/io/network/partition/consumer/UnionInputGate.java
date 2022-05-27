@@ -20,10 +20,11 @@ package org.apache.flink.runtime.io.network.partition.consumer;
 
 import org.apache.flink.runtime.checkpoint.channel.InputChannelInfo;
 import org.apache.flink.runtime.event.TaskEvent;
+import org.apache.flink.runtime.io.network.api.EndOfData;
 import org.apache.flink.runtime.io.network.api.EndOfPartitionEvent;
 import org.apache.flink.runtime.io.network.partition.PrioritizedDeque;
 
-import org.apache.flink.shaded.guava18.com.google.common.collect.Sets;
+import org.apache.flink.shaded.guava30.com.google.common.collect.Sets;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -73,6 +74,9 @@ public class UnionInputGate extends InputGate {
 
     private final Set<IndexedInputGate> inputGatesWithRemainingData;
 
+    private final Set<IndexedInputGate> inputGatesWithRemainingUserData;
+
+    private boolean shouldDrainOnEndOfData = true;
     /**
      * Gates, which notified this input gate about available data. We are using it as a FIFO queue
      * of {@link InputGate}s to avoid starvation and provide some basic fairness.
@@ -104,6 +108,7 @@ public class UnionInputGate extends InputGate {
         }
 
         this.inputGatesWithRemainingData = Sets.newHashSetWithExpectedSize(inputGates.length);
+        this.inputGatesWithRemainingUserData = Sets.newHashSetWithExpectedSize(inputGates.length);
 
         final int maxGateIndex =
                 Arrays.stream(inputGates).mapToInt(IndexedInputGate::getGateIndex).max().orElse(0);
@@ -130,6 +135,7 @@ public class UnionInputGate extends InputGate {
         synchronized (inputGatesWithData) {
             for (IndexedInputGate inputGate : inputGates) {
                 inputGatesWithRemainingData.add(inputGate);
+                inputGatesWithRemainingUserData.add(inputGate);
 
                 CompletableFuture<?> available = inputGate.getAvailableFuture();
 
@@ -175,6 +181,17 @@ public class UnionInputGate extends InputGate {
     }
 
     @Override
+    public EndOfDataStatus hasReceivedEndOfData() {
+        if (!inputGatesWithRemainingUserData.isEmpty()) {
+            return EndOfDataStatus.NOT_END_OF_DATA;
+        } else if (shouldDrainOnEndOfData) {
+            return EndOfDataStatus.DRAINED;
+        } else {
+            return EndOfDataStatus.STOPPED;
+        }
+    }
+
+    @Override
     public Optional<BufferOrEvent> getNext() throws IOException, InterruptedException {
         return getNextBufferOrEvent(true);
     }
@@ -199,6 +216,7 @@ public class UnionInputGate extends InputGate {
         InputWithData<IndexedInputGate, BufferOrEvent> inputWithData = next.get();
 
         handleEndOfPartitionEvent(inputWithData.data, inputWithData.input);
+        handleEndOfUserDataEvent(inputWithData.data, inputWithData.input);
         if (!inputWithData.data.moreAvailable()) {
             inputWithData.data.setMoreAvailable(inputWithData.moreAvailable);
         }
@@ -273,6 +291,19 @@ public class UnionInputGate extends InputGate {
         }
     }
 
+    private void handleEndOfUserDataEvent(BufferOrEvent bufferOrEvent, InputGate inputGate) {
+        if (bufferOrEvent.isEvent()
+                && bufferOrEvent.getEvent().getClass() == EndOfData.class
+                && inputGate.hasReceivedEndOfData() != EndOfDataStatus.NOT_END_OF_DATA) {
+
+            shouldDrainOnEndOfData &= inputGate.hasReceivedEndOfData() == EndOfDataStatus.DRAINED;
+            if (!inputGatesWithRemainingUserData.remove(inputGate)) {
+                throw new IllegalStateException(
+                        "Couldn't find input gate in set of remaining input gates.");
+            }
+        }
+    }
+
     private void markAvailable() {
         CompletableFuture<?> toNotify;
         synchronized (inputGatesWithData) {
@@ -290,9 +321,6 @@ public class UnionInputGate extends InputGate {
 
     @Override
     public void resumeConsumption(InputChannelInfo channelInfo) throws IOException {
-        // BEWARE: consumption resumption only happens for streaming jobs in which all
-        // slots are allocated together so there should be no UnknownInputChannel. We
-        // will refactor the code to not rely on this assumption in the future.
         inputGatesByGateIndex.get(channelInfo.getGateIdx()).resumeConsumption(channelInfo);
     }
 
